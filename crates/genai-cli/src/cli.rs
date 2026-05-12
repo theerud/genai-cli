@@ -42,6 +42,12 @@ pub enum Command {
     },
     /// Garbage-collect orphaned attachment blobs
     Gc,
+    /// First-run setup wizard
+    Init {
+        /// Overwrite existing config without prompting
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

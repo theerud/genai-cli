@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod error;
 mod gemini;
+mod init;
 mod models;
 mod repl;
 mod role;
@@ -39,6 +40,7 @@ async fn main() -> Result<()> {
                 SessionsCmd::Export { name, output } => cmd_sessions_export(name, output.as_deref()),
             },
             Command::Gc => cmd_gc(),
+            Command::Init { force } => init::run(*force),
         };
     }
 

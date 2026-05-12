@@ -11,8 +11,8 @@ A single-binary Rust CLI for day-to-day use of Google's Gemini API: REPL chat, o
 
 ## Scope (v1)
 
-In: chat REPL + one-off, sessions (named + ephemeral), roles, aliases, image gen, TTS, music gen, file attachments (input + output), markdown/code rendering, Gemini server-side built-in tools (`google_search`, `url_context`, `code_execution`), per-session token/cost tracking, `genai init` first-run wizard, `genai gc` for orphan blob cleanup.
-Out (deferred): realtime voice (Live API), embeddings as a user feature, client-side function/tool calling, RAG, MCP.
+In: chat REPL + one-off, sessions (named + ephemeral), roles, aliases, image gen, TTS, music gen, file attachments (input + output), markdown/code rendering, Gemini server-side built-in tools (`google_search`, `url_context`, `code_execution`), client-side local tools (`read_file`, `list_dir`, `fetch_url`, `exec`), per-session token/cost tracking, `genai init` first-run wizard, `genai gc` for orphan blob cleanup.
+Out (deferred): realtime voice (Live API), embeddings as a user feature, user-defined function tools, RAG, MCP, streaming with tool calls.
 
 Image default: prefer `gemini-2.5-flash-image` (nano-banana) over Imagen.
 
@@ -63,9 +63,25 @@ Supported role fields: `model`, `system_prompt`, `temperature`, `max_tokens`, `t
   - Chat-capable role → bare prompts use role's model + system prompt.
   - Output-only role (Imagen, TTS, Lyria) → bare prompts fall back to default chat model with no role system prompt. `.image`/`.tts`/etc. use the role's model.
 
-### Gemini server-side built-in tools
+### Tools
 
-Roles may enable Gemini server-side tools via `tools = ["google_search", "url_context", "code_execution"]`. These run in Gemini's infrastructure; no client-side execution loop. Toggle in-REPL with `.tools`. Client-side / custom function tools are a separate, future slice.
+Two kinds of tools share the same role-level `tools = [...]` list and the same `.tools` REPL command:
+
+- **Gemini server-side built-ins** (`google_search`, `url_context`, `code_execution`) — run inside Gemini's infrastructure; we just declare them on the request.
+- **Local (client-side) tools** — invoked by Gemini via function calling. Built-in to the binary in v0:
+  - `read_file`, `list_dir`, `fetch_url`: read-only, no confirmation.
+  - `exec`: side-effecting, **prompts for confirmation each call** (auto-denied when stdin is not a TTY).
+
+When any local tool is enabled, the chat path switches from streaming to a non-streaming function-call loop. Streaming with tool calls is deferred.
+
+#### Function-call loop
+
+1. Send `generateContent` with `tools.functionDeclarations` for the local tools (and any built-ins).
+2. If the response contains `functionCall` parts, execute each tool locally and append a single `user` message holding all `functionResponse` parts. Repeat.
+3. Stop when the model returns a text-only response, or bail at `MAX_TOOL_ITERATIONS` (8).
+4. Persist the full exchange (user → model+tool back-and-forth → final text) atomically in a single transaction.
+
+User-defined function tools (`~/.config/genai/tools/*.toml`) and MCP are explicitly out of scope for v0.
 
 ## Aliases
 

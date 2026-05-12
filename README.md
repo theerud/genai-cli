@@ -201,14 +201,33 @@ Inside the REPL: `.role coding` to switch, `.role -` to clear, `.role list` to s
 
 **Capability rule:** if the role's model is output-only (Imagen, TTS, Lyria), bare REPL chat falls back to the default chat model with no role system prompt. The role still configures `.image` / `.tts` / `.music` invocations.
 
-Roles may also opt into Gemini server-side built-in tools:
+Roles may opt into tools, mixing Gemini server-side built-ins and client-side local tools in one list:
 
 ```toml
 # ~/.config/genai/roles/research.toml
 model = "gemini-2.5-pro"
 system_prompt = "Cite sources when relevant."
 tools = ["google_search", "url_context"]
+
+# ~/.config/genai/roles/sysadmin.toml
+model = "gemini-2.5-pro"
+system_prompt = "Inspect the user's machine and answer with concrete evidence."
+tools = ["read_file", "list_dir", "fetch_url", "exec"]
 ```
+
+Available tools:
+
+| Tool | Kind | Notes |
+|---|---|---|
+| `google_search` | Gemini built-in | Web search |
+| `url_context` | Gemini built-in | Fetch + ground on URLs server-side |
+| `code_execution` | Gemini built-in | Sandboxed Python |
+| `read_file` | local | Up to 256 KB of text |
+| `list_dir` | local | Up to 200 entries |
+| `fetch_url` | local | http(s) GET, up to 1 MB |
+| `exec` | local | `sh -c …`; **prompts for confirmation each call** |
+
+When any local tool is active, streaming output is disabled and the model is allowed to call tools up to 8 times before producing a final answer. Each call prints a `[tool] …` line on stderr.
 
 ## Sessions & storage
 
@@ -240,7 +259,8 @@ GEMINI_API_KEY=... cargo run -p genai-models-gen
 - **TTS** assumes 16-bit mono PCM @ 24 kHz when wrapping into WAV (matches current Gemini output). Multi-channel TTS would need `pcm16_to_wav` adjustment.
 - **Markdown rendering is line-buffered.** Output appears at line granularity, not character granularity. Trade-off for streaming markdown without flicker.
 - **Realtime voice (Gemini Live API)** is not implemented. The chat REPL is text-only.
-- **Client-side function/tool calling, embeddings as a user feature, and RAG** are not yet implemented. Gemini server-side built-in tools (`google_search`, `url_context`, `code_execution`) are wired up via roles and the `.tools` REPL command.
+- **Embeddings as a user feature, RAG, and user-defined function tools** are not yet implemented. Gemini server-side built-ins (`google_search`, `url_context`, `code_execution`) and a fixed set of local tools (`read_file`, `list_dir`, `fetch_url`, `exec`) are wired up via roles and the `.tools` REPL command.
+- **Streaming is disabled** while a local tool is active. The non-streaming function-call loop is simpler; streaming-with-tools is deferred.
 - **Lyria** worked in the smoke test but is preview and may change request shape; if it breaks you'll see the server error verbatim — adjust `generate_music` in `gemini/tts.rs` if needed.
 
 ## Project layout

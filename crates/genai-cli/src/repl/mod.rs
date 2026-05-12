@@ -289,9 +289,27 @@ async fn handle_session_cmd(state: &mut ReplState, arg: Option<String>) -> Resul
 }
 
 async fn switch_session(state: &mut ReplState, name: &str) -> Result<()> {
+    let existed = state.db.get_session(name)?.is_some();
+    let inherit_candidate = !existed
+        && state.session.is_none()
+        && !state.history.is_empty();
+
     let session = state
         .db
         .get_or_create_session(name, Some(&state.model.id), state.system_prompt.as_deref())?;
+
+    if inherit_candidate {
+        let pair_count = state.history.len() / 2;
+        if pair_count > 0
+            && prompt_yes_no(
+                &format!("Include {} previous turn(s) in this session?", pair_count),
+                true,
+            )?
+        {
+            inherit_history_into_session(&mut state.db, session.id, &state.history, &state.model.id)?;
+        }
+    }
+
     let msgs = state.db.load_messages(session.id)?;
     state.history = messages_to_contents(&msgs);
     if let Some(model) = &session.model {
@@ -307,6 +325,42 @@ async fn switch_session(state: &mut ReplState, name: &str) -> Result<()> {
         state.history.len()
     );
     Ok(())
+}
+
+fn inherit_history_into_session(
+    db: &mut Database,
+    session_id: i64,
+    history: &[Content],
+    model_id: &str,
+) -> Result<()> {
+    // Commit user+assistant pairs. Drop a trailing user message with no
+    // assistant counterpart — that case shouldn't normally occur, but if it
+    // does it isn't safe to persist as a completed turn.
+    let mut i = 0;
+    while i + 1 < history.len() {
+        let u = &history[i];
+        let a = &history[i + 1];
+        if u.role.as_deref() == Some("user") && a.role.as_deref() == Some("model") {
+            db.commit_turn(session_id, u, a, Some(model_id), &[])?;
+        }
+        i += 2;
+    }
+    Ok(())
+}
+
+fn prompt_yes_no(question: &str, default_yes: bool) -> Result<bool> {
+    use std::io::Write;
+    let suffix = if default_yes { "[Y/n]" } else { "[y/N]" };
+    eprint!("{question} {suffix} ");
+    let _ = std::io::stderr().flush();
+    let mut buf = String::new();
+    std::io::stdin().read_line(&mut buf)?;
+    let t = buf.trim().to_lowercase();
+    Ok(match t.as_str() {
+        "" => default_yes,
+        "y" | "yes" => true,
+        _ => false,
+    })
 }
 
 fn handle_role_cmd(state: &mut ReplState, arg: Option<String>) -> Result<()> {

@@ -179,7 +179,12 @@ pub async fn run(mut state: ReplState) -> Result<()> {
                 }
             }
             Err(ReadlineError::Interrupted) => continue,
-            Err(ReadlineError::Eof) => break,
+            Err(ReadlineError::Eof) => {
+                if maybe_prompt_save_on_exit(&mut state)? {
+                    continue;
+                }
+                break;
+            },
             Err(e) => {
                 eprintln!("readline: {e}");
                 break;
@@ -289,7 +294,7 @@ async fn handle_session_cmd(state: &mut ReplState, cmd: SessionCmd) -> Result<()
         }
         SessionCmd::Drop => drop_current_session(state)?,
         SessionCmd::Delete { name } => {
-            if state.db.delete_session(&name)? {
+            if state.db.delete_session_ref(&name)? {
                 eprintln!("deleted session: {name}");
             } else {
                 eprintln!("no session named {name}");
@@ -298,6 +303,31 @@ async fn handle_session_cmd(state: &mut ReplState, cmd: SessionCmd) -> Result<()
         SessionCmd::Export { name } => export_session_inline(state, &name)?,
     }
     Ok(())
+}
+
+fn maybe_prompt_save_on_exit(state: &mut ReplState) -> Result<bool> {
+    let Some(session) = &state.session else {
+        return Ok(false);
+    };
+    if !session.ephemeral || state.history.is_empty() {
+        return Ok(false);
+    }
+    loop {
+        eprint!("Temporary session has unsaved turns. [s]ave as / [d]iscard / [c]ancel? ");
+        let _ = std::io::stderr().flush();
+        let mut buf = String::new();
+        std::io::stdin().read_line(&mut buf)?;
+        match buf.trim().to_lowercase().as_str() {
+            "s" | "save" => {
+                let name = prompt_text("Session name")?;
+                save_current_session_as(state, &name)?;
+                return Ok(false);
+            }
+            "d" | "discard" => return Ok(false),
+            "c" | "cancel" | "" => return Ok(true),
+            _ => eprintln!("Please answer s, d, or c."),
+        }
+    }
 }
 
 fn start_ephemeral_session(state: &mut ReplState) -> Result<()> {
@@ -416,7 +446,7 @@ fn maybe_resolve_ephemeral_before_transition(state: &mut ReplState) -> Result<()
     }
     if state.history.is_empty() {
         let tmp = state.session.take().unwrap();
-        state.db.delete_session(tmp.label())?;
+        state.db.delete_session_ref(&tmp.id().to_string())?;
         return Ok(());
     }
     loop {
@@ -432,7 +462,7 @@ fn maybe_resolve_ephemeral_before_transition(state: &mut ReplState) -> Result<()
             }
             "d" | "discard" => {
                 let tmp = state.session.take().unwrap();
-                state.db.delete_session(tmp.label())?;
+                state.db.delete_session_ref(&tmp.id().to_string())?;
                 return Ok(());
             }
             "c" | "cancel" | "" => anyhow::bail!("cancelled"),
@@ -811,9 +841,22 @@ Commands:
   .clear             clear in-memory history, drop session
   .model [id|-]      show / switch / reset chat model
   .set <key> <val>   temperature, max-tokens, thinking
-  .file <path>...    queue file(s) for next message (Phase 7)
+  .file <path>...    queue file(s) for next message
   .edit              compose message in $EDITOR
-  .session [name|list|-]    switch / list / drop session
+  .session           show current session state
+  .session start     start an unnamed temporary session
+  .session save <name>
+                     save temporary session as a named one
+  .session switch <name-or-id>
+                     switch to / create a named session
+  .session rename <name>
+                     rename current named session
+  .session list      list named sessions with ids
+  .session drop      leave session mode
+  .session delete <name-or-id>
+                     delete a named session
+  .session export <name-or-id>
+                     export session as JSONL to stdout
   .role [name|list|-]       switch / list / clear role
   .image / .tts / .music    one-off generation in REPL
   .undo              drop last completed turn from history (+ session DB)

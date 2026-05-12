@@ -495,7 +495,7 @@ fn cmd_sessions_list() -> Result<()> {
 
 fn cmd_sessions_delete(name: &str) -> Result<()> {
     let mut db = open_db()?;
-    if db.delete_session(name)? {
+    if db.delete_session_ref(name)? {
         eprintln!("deleted session: {name}");
     } else {
         bail!("no session named {name}");

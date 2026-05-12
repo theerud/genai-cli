@@ -18,6 +18,7 @@ pub struct Session {
 
 #[derive(Debug, Clone)]
 pub struct SessionSummary {
+    pub id: i64,
     pub name: String,
     pub model: Option<String>,
     pub updated_at: String,
@@ -111,6 +112,36 @@ impl Database {
         Ok(row)
     }
 
+    pub fn get_session_by_id(&self, id: i64) -> Result<Option<Session>> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT id, name, model, system_prompt FROM sessions WHERE id = ?1",
+                params![id],
+                |r| {
+                    Ok(Session {
+                        id: r.get(0)?,
+                        name: r.get(1)?,
+                        model: r.get(2)?,
+                        system_prompt: r.get(3)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    pub fn resolve_session_ref(&self, value: &str) -> Result<Option<Session>> {
+        if let Ok(id) = value.parse::<i64>() {
+            if id > 0 {
+                if let Some(s) = self.get_session_by_id(id)? {
+                    return Ok(Some(s));
+                }
+            }
+        }
+        self.get_session(value)
+    }
+
     pub fn create_session(
         &mut self,
         name: &str,
@@ -146,27 +177,36 @@ impl Database {
 
     pub fn list_sessions(&self) -> Result<Vec<SessionSummary>> {
         let mut stmt = self.conn.prepare(
-            "SELECT s.name, s.model, s.updated_at, COUNT(m.id) \
+            "SELECT s.id, s.name, s.model, s.updated_at, COUNT(m.id) \
              FROM sessions s LEFT JOIN messages m ON m.session_id = s.id \
              GROUP BY s.id ORDER BY s.updated_at DESC",
         )?;
         let rows = stmt
             .query_map([], |r| {
                 Ok(SessionSummary {
-                    name: r.get(0)?,
-                    model: r.get(1)?,
-                    updated_at: r.get(2)?,
-                    message_count: r.get(3)?,
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    model: r.get(2)?,
+                    updated_at: r.get(3)?,
+                    message_count: r.get(4)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
 
-    pub fn delete_session(&mut self, name: &str) -> Result<bool> {
+    pub fn delete_session_ref(&mut self, value: &str) -> Result<bool> {
+        if let Ok(id) = value.parse::<i64>() {
+            if id > 0 {
+                let n = self
+                    .conn
+                    .execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
+                return Ok(n > 0);
+            }
+        }
         let n = self
             .conn
-            .execute("DELETE FROM sessions WHERE name = ?1", params![name])?;
+            .execute("DELETE FROM sessions WHERE name = ?1", params![value])?;
         Ok(n > 0)
     }
 
@@ -386,7 +426,7 @@ mod tests {
         db.create_session("a", None, None).unwrap();
         db.create_session("b", None, None).unwrap();
         assert_eq!(db.list_sessions().unwrap().len(), 2);
-        assert!(db.delete_session("a").unwrap());
+        assert!(db.delete_session_ref("a").unwrap());
         assert_eq!(db.list_sessions().unwrap().len(), 1);
     }
 

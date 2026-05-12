@@ -139,7 +139,8 @@ pub fn gc_blobs(db: &mut Database) -> Result<usize> {
 pub fn format_summary(s: &SessionSummary, current: Option<&str>) -> String {
     let marker = if Some(s.name.as_str()) == current { "*" } else { " " };
     format!(
-        "{marker} {:<24} {:<28}  {} msg",
+        "{marker} #{:<4} {:<24} {:<28}  {} msg",
+        s.id,
         s.name,
         s.model.as_deref().unwrap_or("-"),
         s.message_count

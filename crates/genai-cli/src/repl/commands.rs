@@ -43,7 +43,8 @@ pub struct ActionArgs {
 pub fn parse(line: &str) -> Option<DotCmd> {
     let line = line.trim();
     let rest = line.strip_prefix('.')?;
-    let mut parts = rest.split_whitespace();
+    let tokens = split_shellish(rest);
+    let mut parts = tokens.iter().map(String::as_str);
     let head = parts.next().unwrap_or("");
     let tail: Vec<&str> = parts.collect();
     let cmd = match head {
@@ -86,6 +87,42 @@ pub fn parse(line: &str) -> Option<DotCmd> {
         _ => DotCmd::Unknown(format!("unknown command: .{head}")),
     };
     Some(cmd)
+}
+
+fn split_shellish(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut escape = false;
+    for ch in s.chars() {
+        if escape {
+            cur.push(ch);
+            escape = false;
+            continue;
+        }
+        match ch {
+            '\\' => escape = true,
+            '"' | '\'' => {
+                if quote == Some(ch) {
+                    quote = None;
+                } else if quote.is_none() {
+                    quote = Some(ch);
+                } else {
+                    cur.push(ch);
+                }
+            }
+            c if c.is_whitespace() && quote.is_none() => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
 }
 
 fn parse_session_cmd(tail: &[&str]) -> Result<SessionCmd, String> {
@@ -202,6 +239,14 @@ mod tests {
     fn session_subcommand_errors() {
         assert!(matches!(parse(".session foo"), Some(DotCmd::Unknown(_))));
         assert!(matches!(parse(".session save"), Some(DotCmd::Unknown(_))));
+    }
+
+    #[test]
+    fn supports_quoted_session_name() {
+        match parse(".session save \"forty two\"") {
+            Some(DotCmd::Session(SessionCmd::Save { name })) => assert_eq!(name, "forty two"),
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[test]

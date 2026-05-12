@@ -373,17 +373,40 @@ async fn run_one_shot_chat(
     let mut renderer = render::make_boxed(stdout, tty, style);
     let mut accumulated = String::new();
 
+    let mut prompt_tok: Option<u32> = None;
+    let mut output_tok: Option<u32> = None;
     while let Some(ev) = stream.next().await {
         match ev? {
             ChatEvent::TextDelta(text) => {
                 accumulated.push_str(&text);
                 renderer.push(&text);
             }
-            ChatEvent::Finish { .. } => {}
+            ChatEvent::Finish {
+                prompt_tokens,
+                output_tokens,
+                ..
+            } => {
+                prompt_tok = prompt_tokens;
+                output_tok = output_tokens;
+            }
         }
     }
     renderer.finish();
     drop(renderer);
+    if let (Some(p), Some(o)) = (prompt_tok, output_tok) {
+        let cost = registry
+            .get(&resolved.id)
+            .map(|m| {
+                (p as f64) / 1_000_000.0 * m.input_price_per_1m
+                    + (o as f64) / 1_000_000.0 * m.output_price_per_1m
+            })
+            .unwrap_or(0.0);
+        if cost > 0.0 {
+            eprintln!("(usage: prompt={p} output={o}, est. ${cost:.4})");
+        } else {
+            eprintln!("(usage: prompt={p} output={o})");
+        }
+    }
 
     if let (Some(s), Some(db)) = (active.as_ref(), db_opt.as_mut()) {
         let hashes = session::persist_attachments(db, &attachments)?;

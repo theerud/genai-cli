@@ -252,6 +252,32 @@ impl Database {
             .execute("DELETE FROM attachments WHERE hash = ?1", params![hash])?;
         Ok(())
     }
+
+    /// Drop the last completed turn (the highest-seq assistant message plus the
+    /// preceding user message) from a session. Returns true if anything was dropped.
+    pub fn pop_last_turn(&mut self, session_id: i64) -> Result<bool> {
+        let tx = self.conn.transaction()?;
+        let last_seq: Option<i64> = tx
+            .query_row(
+                "SELECT MAX(seq) FROM messages WHERE session_id = ?1",
+                params![session_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .flatten();
+        let Some(seq) = last_seq else {
+            return Ok(false);
+        };
+        // Drop last assistant + preceding user. If history is odd (shouldn't be),
+        // dropping the last message alone is still better than nothing.
+        let lo = (seq - 1).max(1);
+        tx.execute(
+            "DELETE FROM messages WHERE session_id = ?1 AND seq >= ?2",
+            params![session_id, lo],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
 }
 
 fn next_seq(tx: &Transaction, session_id: i64) -> Result<i64> {

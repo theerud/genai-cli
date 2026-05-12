@@ -13,6 +13,8 @@ pub enum DotCmd {
     Image(ActionArgs),
     Tts(ActionArgs),
     Music(ActionArgs),
+    Undo,
+    Retry,
     Unknown(String),
 }
 
@@ -51,6 +53,8 @@ pub fn parse(line: &str) -> Option<DotCmd> {
         "edit" => DotCmd::Edit,
         "role" => DotCmd::Role(opt_first(&tail)),
         "session" => DotCmd::Session(opt_first(&tail)),
+        "undo" => DotCmd::Undo,
+        "retry" => DotCmd::Retry,
         "image" => match parse_action_args(&tail) {
             Ok(a) => DotCmd::Image(a),
             Err(e) => DotCmd::Unknown(format!(".image: {e}")),

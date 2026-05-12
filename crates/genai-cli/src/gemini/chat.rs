@@ -19,6 +19,8 @@ pub enum ChatEvent {
     TextDelta(String),
     Finish {
         reason: Option<String>,
+        prompt_tokens: Option<u32>,
+        output_tokens: Option<u32>,
         total_tokens: Option<u32>,
     },
 }
@@ -60,18 +62,22 @@ impl Client {
         }
 
         let byte_stream = resp.bytes_stream();
-        let event_stream = sse_events(byte_stream).filter_map(|ev| async move {
-            match ev {
-                Err(e) => Some(Err(e)),
-                Ok(data) => parse_sse_data(&data).transpose(),
-            }
+        let event_stream = sse_events(byte_stream).flat_map(|ev| {
+            let events: Vec<Result<ChatEvent>> = match ev {
+                Err(e) => vec![Err(e)],
+                Ok(data) => match parse_sse_data(&data) {
+                    Ok(v) => v.into_iter().map(Ok).collect(),
+                    Err(e) => vec![Err(e)],
+                },
+            };
+            futures_util::stream::iter(events)
         });
 
         Ok(Box::pin(event_stream))
     }
 }
 
-fn parse_sse_data(data: &str) -> Result<Option<ChatEvent>> {
+fn parse_sse_data(data: &str) -> Result<Vec<ChatEvent>> {
     let resp: GenerateContentResponse =
         serde_json::from_str(data).with_context(|| format!("parsing SSE data: {data}"))?;
 
@@ -90,16 +96,24 @@ fn parse_sse_data(data: &str) -> Result<Option<ChatEvent>> {
         }
     }
 
+    let mut out = Vec::new();
     if !text.is_empty() {
-        return Ok(Some(ChatEvent::TextDelta(text)));
+        out.push(ChatEvent::TextDelta(text));
     }
-    if let Some(reason) = finish_reason {
-        return Ok(Some(ChatEvent::Finish {
-            reason: Some(reason),
-            total_tokens: resp.usage_metadata.and_then(|u| u.total_token_count),
-        }));
+    let usage = resp.usage_metadata;
+    if finish_reason.is_some() || usage.is_some() {
+        let (prompt_tokens, output_tokens, total_tokens) = match &usage {
+            Some(u) => (u.prompt_token_count, u.candidates_token_count, u.total_token_count),
+            None => (None, None, None),
+        };
+        out.push(ChatEvent::Finish {
+            reason: finish_reason,
+            prompt_tokens,
+            output_tokens,
+            total_tokens,
+        });
     }
-    Ok(None)
+    Ok(out)
 }
 
 /// Parse an SSE byte stream into individual `data:` payloads (one per event).

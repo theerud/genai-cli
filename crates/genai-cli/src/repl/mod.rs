@@ -37,6 +37,35 @@ pub struct ReplState {
     pub pending_files: Vec<PathBuf>,
     pub session: Option<ActiveSession>,
     pub role: Option<Role>,
+    pub usage: UsageStats,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UsageStats {
+    pub turns: u64,
+    pub prompt_tokens: u64,
+    pub output_tokens: u64,
+    pub estimated_cost_usd: f64,
+}
+
+impl UsageStats {
+    pub fn accumulate(
+        &mut self,
+        prompt: Option<u32>,
+        output: Option<u32>,
+        registry: &Registry,
+        model_id: &str,
+    ) {
+        self.turns += 1;
+        let p = prompt.unwrap_or(0) as u64;
+        let o = output.unwrap_or(0) as u64;
+        self.prompt_tokens += p;
+        self.output_tokens += o;
+        if let Some(m) = registry.get(model_id) {
+            self.estimated_cost_usd += (p as f64) / 1_000_000.0 * m.input_price_per_1m;
+            self.estimated_cost_usd += (o as f64) / 1_000_000.0 * m.output_price_per_1m;
+        }
+    }
 }
 
 impl ReplState {
@@ -88,6 +117,7 @@ impl ReplState {
             pending_files: Vec::new(),
             session,
             role,
+            usage: UsageStats::default(),
         }
     }
 
@@ -227,6 +257,8 @@ async fn handle_command(state: &mut ReplState, cmd: DotCmd) -> Result<()> {
         DotCmd::Image(args) => handle_image_cmd(state, args).await?,
         DotCmd::Tts(args) => handle_tts_cmd(state, args).await?,
         DotCmd::Music(args) => handle_music_cmd(state, args).await?,
+        DotCmd::Undo => handle_undo(state)?,
+        DotCmd::Retry => handle_retry(state).await?,
         DotCmd::Unknown(msg) => eprintln!("{msg}"),
     }
     Ok(())
@@ -591,9 +623,59 @@ Commands:
   .file <path>...    queue file(s) for next message (Phase 7)
   .edit              compose message in $EDITOR
   .session [name|list|-]    switch / list / drop session
-  .role              (later phase)
+  .role [name|list|-]       switch / list / clear role
+  .image / .tts / .music    one-off generation in REPL
+  .undo              drop last completed turn from history (+ session DB)
+  .retry             re-run the last user message
 "
     );
+}
+
+fn handle_undo(state: &mut ReplState) -> Result<()> {
+    if state.history.len() < 2 {
+        eprintln!("(nothing to undo)");
+        return Ok(());
+    }
+    state.history.pop();
+    state.history.pop();
+    if let Some(s) = &state.session {
+        state.db.pop_last_turn(s.id())?;
+    }
+    eprintln!("(undid last turn)");
+    Ok(())
+}
+
+async fn handle_retry(state: &mut ReplState) -> Result<()> {
+    if state.history.is_empty() {
+        eprintln!("(no previous turn to retry)");
+        return Ok(());
+    }
+    // Find the last user message; drop the last completed turn from state + DB.
+    let last_user_text = state
+        .history
+        .iter()
+        .rev()
+        .find(|c| c.role.as_deref() == Some("user"))
+        .and_then(|c| {
+            c.parts.iter().find_map(|p| match p {
+                Part::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+        });
+    let Some(text) = last_user_text else {
+        eprintln!("(last user message has no text part to retry)");
+        return Ok(());
+    };
+    if state.history.len() >= 2 {
+        state.history.pop();
+        state.history.pop();
+    } else {
+        state.history.clear();
+    }
+    if let Some(s) = &state.session {
+        state.db.pop_last_turn(s.id())?;
+    }
+    chat_turn(state, text).await
 }
 
 fn print_info(state: &ReplState) {
@@ -614,6 +696,15 @@ fn print_info(state: &ReplState) {
         eprintln!("thinking:     {t}");
     }
     eprintln!("history:      {} message(s)", state.history.len());
+    if state.usage.turns > 0 {
+        eprintln!(
+            "usage:        {} turn(s), prompt={} output={} tokens",
+            state.usage.turns, state.usage.prompt_tokens, state.usage.output_tokens
+        );
+        if state.usage.estimated_cost_usd > 0.0 {
+            eprintln!("cost (est.):  ${:.4}", state.usage.estimated_cost_usd);
+        }
+    }
 }
 
 async fn chat_turn(state: &mut ReplState, user_text: String) -> Result<()> {
@@ -638,7 +729,9 @@ async fn chat_turn(state: &mut ReplState, user_text: String) -> Result<()> {
     let mut renderer = render::make_boxed(stdout, tty, style);
 
     let mut accumulated = String::new();
-    let outcome = consume_stream(stream, renderer.as_mut(), &mut accumulated).await;
+    let mut last_usage = (None, None);
+    let outcome =
+        consume_stream(stream, renderer.as_mut(), &mut accumulated, &mut last_usage).await;
     renderer.finish();
 
     match outcome {
@@ -661,6 +754,9 @@ async fn chat_turn(state: &mut ReplState, user_text: String) -> Result<()> {
             state.history.push(user_msg);
             state.history.push(assistant);
             state.pending_files.clear();
+            state
+                .usage
+                .accumulate(last_usage.0, last_usage.1, &state.registry, &state.model.id);
             Ok(())
         }
         Err(StreamErr::Cancelled) => {
@@ -680,6 +776,7 @@ async fn consume_stream(
     mut stream: crate::gemini::chat::ChatStream,
     renderer: &mut dyn Renderer,
     accumulated: &mut String,
+    last_usage: &mut (Option<u32>, Option<u32>),
 ) -> std::result::Result<(), StreamErr> {
     loop {
         tokio::select! {
@@ -692,7 +789,10 @@ async fn consume_stream(
                     accumulated.push_str(&text);
                     renderer.push(&text);
                 }
-                Some(Ok(ChatEvent::Finish { .. })) => return Ok(()),
+                Some(Ok(ChatEvent::Finish { prompt_tokens, output_tokens, .. })) => {
+                    *last_usage = (prompt_tokens, output_tokens);
+                    return Ok(());
+                }
             }
         }
     }

@@ -18,7 +18,6 @@ use gemini::Client;
 use gemini::chat::{ChatEvent, ChatRequest};
 use gemini::image::{self as image_api, ImageRequest, InputImage};
 use gemini::tts::{AudioOut, MusicRequest, TtsRequest, pcm16_to_wav};
-use tools as builtin_tools;
 use gemini::types::{Content, GenerationConfig, Part};
 use models::alias::{self, ResolvedModel};
 use repl::render::{self};
@@ -366,9 +365,7 @@ async fn run_one_shot_chat(
         .as_ref()
         .map(|r| r.tools.clone())
         .unwrap_or_default();
-    for t in &enabled_tools {
-        builtin_tools::validate_enabled_tool(registry, &resolved.id, t);
-    }
+    tools::validate_all(registry, &resolved.id, &enabled_tools);
 
     let client = Client::new(api_key.to_string(), cfg.api_base().to_string())?;
 
@@ -377,18 +374,30 @@ async fn run_one_shot_chat(
     let mut contents = session_history;
     contents.push(user_msg.clone());
 
+    if tools::has_local(&enabled_tools) {
+        return run_one_shot_with_tools(
+            cli,
+            cfg,
+            registry,
+            &client,
+            resolved,
+            system_prompt,
+            enabled_tools,
+            contents,
+            user_msg,
+            attachments,
+            active,
+            db_opt,
+        )
+        .await;
+    }
+
     let req = ChatRequest {
         model: resolved.id.clone(),
         contents,
         system_instruction: system_prompt,
         generation_config: build_generation_config(cfg, &resolved),
-        tools: {
-            let tools: Vec<_> = enabled_tools
-                .iter()
-                .filter_map(|n| builtin_tools::parse_builtin(n))
-                .collect();
-            if tools.is_empty() { None } else { Some(tools) }
-        },
+        tools: tools::build_request_tools(&enabled_tools),
     };
 
     let mut stream = client.stream_chat(req).await?;
@@ -445,6 +454,100 @@ async fn run_one_shot_chat(
 
     let _ = io::stderr().flush();
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_one_shot_with_tools(
+    cli: &cli::Cli,
+    cfg: &config::Config,
+    registry: &models::Registry,
+    client: &Client,
+    resolved: ResolvedModel,
+    system_prompt: Option<String>,
+    enabled_tools: Vec<String>,
+    contents: Vec<Content>,
+    user_msg: Content,
+    attachments: Vec<session::attachment::Attachment>,
+    active: Option<session::ActiveSession>,
+    db_opt: Option<session::db::Database>,
+) -> Result<()> {
+    let req = tools::runner::ToolLoopRequest {
+        model: resolved.id.clone(),
+        contents,
+        system_instruction: system_prompt,
+        generation_config: build_generation_config(cfg, &resolved),
+        enabled_tools,
+    };
+    let mut ui = OneShotToolUi;
+    let outcome = tools::runner::run(client, req, &mut ui).await?;
+
+    let stdout = io::stdout();
+    let tty = stdout.is_terminal() && !cli.no_stream;
+    let style = render::pick_style(tty, cfg.repl.color, cfg.repl.markdown);
+    let mut renderer = render::make_boxed(stdout, tty, style);
+    renderer.push(&outcome.final_text);
+    renderer.finish();
+    drop(renderer);
+
+    if let (Some(p), Some(o)) = (outcome.prompt_tokens, outcome.output_tokens) {
+        let cost = registry
+            .get(&resolved.id)
+            .map(|m| {
+                (p as f64) / 1_000_000.0 * m.input_price_per_1m
+                    + (o as f64) / 1_000_000.0 * m.output_price_per_1m
+            })
+            .unwrap_or(0.0);
+        if cost > 0.0 {
+            eprintln!("(usage: prompt={p} output={o}, est. ${cost:.4})");
+        } else {
+            eprintln!("(usage: prompt={p} output={o})");
+        }
+    }
+
+    if let (Some(s), Some(mut db)) = (active.as_ref(), db_opt) {
+        let hashes = session::persist_attachments(&mut db, &attachments)?;
+        db.commit_exchange(
+            s.id(),
+            &user_msg,
+            &outcome.exchange,
+            Some(&resolved.id),
+            &hashes,
+        )?;
+    }
+    let _ = io::stderr().flush();
+    Ok(())
+}
+
+struct OneShotToolUi;
+
+impl tools::runner::ToolUi for OneShotToolUi {
+    fn announce_call(&mut self, name: &str, summary: &str) {
+        eprintln!("[tool] {summary} ({name})");
+    }
+    fn announce_result(&mut self, _name: &str, ok: bool, preview: &str) {
+        let tag = if ok { "ok" } else { "err" };
+        eprintln!("[tool/{tag}] {preview}");
+    }
+    fn confirm(&mut self, _name: &str, summary: &str) -> tools::runner::Confirmation {
+        use std::io::{BufRead, Write};
+        let stdin = io::stdin();
+        if !stdin.is_terminal() {
+            eprintln!("[tool] {summary}: auto-denied (no TTY)");
+            return tools::runner::Confirmation::Deny;
+        }
+        eprint!("[tool] run `{summary}`? [y/N] ");
+        let _ = io::stderr().flush();
+        let mut line = String::new();
+        if stdin.lock().read_line(&mut line).is_err() {
+            return tools::runner::Confirmation::Deny;
+        }
+        let answer = line.trim().to_ascii_lowercase();
+        if matches!(answer.as_str(), "y" | "yes") {
+            tools::runner::Confirmation::Allow
+        } else {
+            tools::runner::Confirmation::Deny
+        }
+    }
 }
 
 fn build_generation_config(

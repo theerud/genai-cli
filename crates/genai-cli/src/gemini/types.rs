@@ -19,6 +19,27 @@ pub enum Part {
         #[serde(rename = "inlineData")]
         inline_data: InlineData,
     },
+    FunctionCall {
+        #[serde(rename = "functionCall")]
+        function_call: FunctionCall,
+    },
+    FunctionResponse {
+        #[serde(rename = "functionResponse")]
+        function_response: FunctionResponse,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionCall {
+    pub name: String,
+    #[serde(default)]
+    pub args: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionResponse {
+    pub name: String,
+    pub response: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,11 +84,22 @@ pub struct GenerateContentRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum Tool {
+    #[serde(rename = "googleSearch")]
     GoogleSearch {},
+    #[serde(rename = "urlContext")]
     UrlContext {},
+    #[serde(rename = "codeExecution")]
     CodeExecution {},
+    #[serde(rename = "functionDeclarations")]
+    FunctionDeclarations(Vec<FunctionDeclaration>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FunctionDeclaration {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Deserialize)]

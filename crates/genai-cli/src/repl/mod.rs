@@ -880,18 +880,29 @@ fn handle_tools_cmd(state: &mut ReplState, arg: Option<String>) -> Result<()> {
             }
         }
         Some("list") => {
+            eprintln!("Gemini built-ins:");
             for name in tools::builtin_names() {
                 let marker = if state.active_tools.iter().any(|t| t == name) {
                     "*"
                 } else {
                     " "
                 };
-                eprintln!("{marker} {name}");
+                eprintln!("  {marker} {name}");
+            }
+            eprintln!("Local (client-side):");
+            for name in tools::local_names() {
+                let marker = if state.active_tools.iter().any(|t| t == *name) {
+                    "*"
+                } else {
+                    " "
+                };
+                eprintln!("  {marker} {name}");
             }
         }
         Some(name) => {
-            if tools::parse_builtin(name).is_none() {
-                anyhow::bail!("unknown built-in tool: {name}");
+            let known = tools::parse_builtin(name).is_some() || tools::lookup_local(name).is_some();
+            if !known {
+                anyhow::bail!("unknown tool: {name}");
             }
             if state.active_tools.iter().any(|t| t == name) {
                 state.active_tools.retain(|t| t != name);
@@ -985,10 +996,6 @@ fn print_info(state: &ReplState) {
     }
 }
 
-fn build_enabled_tools(names: &[String]) -> Option<Vec<crate::gemini::types::Tool>> {
-    let tools: Vec<_> = names.iter().filter_map(|n| tools::parse_builtin(n)).collect();
-    if tools.is_empty() { None } else { Some(tools) }
-}
 
 async fn chat_turn(state: &mut ReplState, user_text: String) -> Result<()> {
     let files = state.pending_files.clone();
@@ -997,12 +1004,16 @@ async fn chat_turn(state: &mut ReplState, user_text: String) -> Result<()> {
     let mut contents = state.history.clone();
     contents.push(user_msg.clone());
 
+    if tools::has_local(&state.active_tools) {
+        return chat_turn_with_tools(state, contents, user_msg, attachments).await;
+    }
+
     let req = ChatRequest {
         model: state.model.id.clone(),
         contents,
         system_instruction: state.system_prompt.clone(),
         generation_config: state.build_generation_config(),
-        tools: build_enabled_tools(&state.active_tools),
+        tools: tools::build_request_tools(&state.active_tools),
     };
 
     let stream = state.client.stream_chat(req).await?;
@@ -1048,6 +1059,91 @@ async fn chat_turn(state: &mut ReplState, user_text: String) -> Result<()> {
             Ok(())
         }
         Err(StreamErr::Failed(e)) => Err(e),
+    }
+}
+
+async fn chat_turn_with_tools(
+    state: &mut ReplState,
+    contents: Vec<Content>,
+    user_msg: Content,
+    attachments: Vec<crate::session::attachment::Attachment>,
+) -> Result<()> {
+    let req = tools::runner::ToolLoopRequest {
+        model: state.model.id.clone(),
+        contents,
+        system_instruction: state.system_prompt.clone(),
+        generation_config: state.build_generation_config(),
+        enabled_tools: state.active_tools.clone(),
+    };
+    let mut ui = ReplToolUi;
+    let outcome = match tools::runner::run(&state.client, req, &mut ui).await {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("(tool loop failed — turn discarded: {e})");
+            return Ok(());
+        }
+    };
+
+    // Render the final assistant text now that the loop has settled.
+    let stdout = io::stdout();
+    let tty = stdout.is_terminal();
+    let style = render::pick_style(tty, state.cfg.repl.color, state.cfg.repl.markdown);
+    let mut renderer = render::make_boxed(stdout, tty, style);
+    renderer.push(&outcome.final_text);
+    renderer.finish();
+
+    if let Some(s) = &state.session {
+        let hashes = crate::session::persist_attachments(&mut state.db, &attachments)?;
+        let session_id = s.id();
+        state.db.commit_exchange(
+            session_id,
+            &user_msg,
+            &outcome.exchange,
+            Some(&state.model.id),
+            &hashes,
+        )?;
+    }
+    state.history.push(user_msg);
+    state.history.extend(outcome.exchange);
+    state.pending_files.clear();
+    state.usage.accumulate(
+        outcome.prompt_tokens,
+        outcome.output_tokens,
+        &state.registry,
+        &state.model.id,
+    );
+    Ok(())
+}
+
+struct ReplToolUi;
+
+impl tools::runner::ToolUi for ReplToolUi {
+    fn announce_call(&mut self, name: &str, summary: &str) {
+        eprintln!("[tool] {summary} ({name})");
+    }
+    fn announce_result(&mut self, _name: &str, ok: bool, preview: &str) {
+        let tag = if ok { "ok" } else { "err" };
+        eprintln!("[tool/{tag}] {preview}");
+    }
+    fn confirm(&mut self, _name: &str, summary: &str) -> tools::runner::Confirmation {
+        use std::io::{BufRead, Write};
+        let stdin = io::stdin();
+        if !stdin.is_terminal() {
+            eprintln!("[tool] {summary}: auto-denied (no TTY)");
+            return tools::runner::Confirmation::Deny;
+        }
+        eprint!("[tool] run `{summary}`? [y/N] ");
+        let _ = io::stderr().flush();
+        let mut line = String::new();
+        if stdin.lock().read_line(&mut line).is_err() {
+            return tools::runner::Confirmation::Deny;
+        }
+        let answer = line.trim().to_ascii_lowercase();
+        if matches!(answer.as_str(), "y" | "yes") {
+            tools::runner::Confirmation::Allow
+        } else {
+            tools::runner::Confirmation::Deny
+        }
     }
 }
 

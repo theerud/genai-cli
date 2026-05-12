@@ -241,6 +241,26 @@ impl Database {
         model: Option<&str>,
         attachment_hashes: &[String],
     ) -> Result<()> {
+        self.commit_exchange(
+            session_id,
+            user,
+            std::slice::from_ref(assistant),
+            model,
+            attachment_hashes,
+        )
+    }
+
+    /// Like `commit_turn`, but the assistant side may be a chain of multiple
+    /// model and tool-response messages produced by a function-calling loop.
+    /// All messages are persisted in one transaction.
+    pub fn commit_exchange(
+        &mut self,
+        session_id: i64,
+        user: &Content,
+        chain: &[Content],
+        model: Option<&str>,
+        attachment_hashes: &[String],
+    ) -> Result<()> {
         let tx = self.conn.transaction()?;
         let next_seq = next_seq(&tx, session_id)?;
         let now = now_iso();
@@ -252,7 +272,9 @@ impl Database {
                 params![user_id, hash],
             )?;
         }
-        insert_message(&tx, session_id, next_seq + 1, assistant, &now)?;
+        for (i, msg) in chain.iter().enumerate() {
+            insert_message(&tx, session_id, next_seq + 1 + i as i64, msg, &now)?;
+        }
         tx.execute(
             "UPDATE sessions SET updated_at = ?1, model = COALESCE(?2, model) WHERE id = ?3",
             params![now, model, session_id],

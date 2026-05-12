@@ -26,7 +26,56 @@ pub enum ChatEvent {
 
 pub type ChatStream = Pin<Box<dyn Stream<Item = Result<ChatEvent>> + Send>>;
 
+pub struct ChatResponse {
+    pub content: Option<Content>,
+    pub prompt_tokens: Option<u32>,
+    pub output_tokens: Option<u32>,
+}
+
 impl Client {
+    pub async fn generate_content(&self, req: ChatRequest) -> Result<ChatResponse> {
+        let url = format!(
+            "{}/v1beta/models/{}:generateContent",
+            self.base, req.model
+        );
+        let body = GenerateContentRequest {
+            contents: req.contents,
+            system_instruction: req.system_instruction.map(|t| Content {
+                role: None,
+                parts: vec![Part::Text { text: t }],
+            }),
+            generation_config: req.generation_config,
+            tools: req.tools,
+        };
+        let resp = self
+            .http
+            .post(&url)
+            .header("x-goog-api-key", &self.api_key)
+            .json(&body)
+            .send()
+            .await
+            .context("sending generateContent request")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            if let Ok(env) = serde_json::from_str::<ApiErrorEnvelope>(&text) {
+                bail!("API {}: {}", status, env.error.message);
+            }
+            bail!("API {}: {}", status, text);
+        }
+        let parsed: GenerateContentResponse = resp.json().await.context("parsing response")?;
+        let content = parsed.candidates.into_iter().next().and_then(|c| c.content);
+        let (prompt_tokens, output_tokens) = match parsed.usage_metadata {
+            Some(u) => (u.prompt_token_count, u.candidates_token_count),
+            None => (None, None),
+        };
+        Ok(ChatResponse {
+            content,
+            prompt_tokens,
+            output_tokens,
+        })
+    }
+
     pub async fn stream_chat(&self, req: ChatRequest) -> Result<ChatStream> {
         let url = format!(
             "{}/v1beta/models/{}:streamGenerateContent?alt=sse",

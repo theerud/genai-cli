@@ -104,8 +104,19 @@ Prompt markers:
 | `.set <key> <value>` | `temperature`, `max-tokens`, `thinking` |
 | `.file <path>...` | queue file(s) for next message |
 | `.edit` | compose next message in `$EDITOR` |
-| `.session [name\|list\|-]` | switch / list / drop session |
+| `.session` | show current session state |
+| `.session start` | begin an ephemeral session |
+| `.session save <name>` | persist the ephemeral session under a name |
+| `.session switch <name\|id>` | resume a saved session |
+| `.session rename <name>` | rename current session |
+| `.session list` | list sessions with IDs |
+| `.session drop` | discard current ephemeral session |
+| `.session delete <name\|id>` | delete a saved session |
+| `.session export <name\|id>` | export current session as JSONL |
 | `.role [name\|list\|-]` | switch / list / clear role |
+| `.tools [name]` | list or toggle Gemini server-side built-in tools |
+| `.undo` | drop the last completed turn |
+| `.retry` | re-run the previous user prompt |
 | `.image [-m MODEL] [-o PATH] [-f FILE] "prompt"` | generate an image |
 | `.tts [-m MODEL] [-v VOICE] [-o PATH] "text"` | speech synthesis |
 | `.music [-m MODEL] [-o PATH] "prompt"` | music generation |
@@ -121,6 +132,7 @@ Ctrl-C during a streaming response cancels cleanly without polluting session his
 | `genai sessions delete <name>` | delete a session |
 | `genai sessions export <name> [-o PATH]` | export session as JSONL (stdout if `-o -` or omitted) |
 | `genai gc` | remove attachment blobs no longer referenced by any message |
+| `genai init [--force]` | first-run wizard to write `config.toml` |
 
 ## Config
 
@@ -189,6 +201,15 @@ Inside the REPL: `.role coding` to switch, `.role -` to clear, `.role list` to s
 
 **Capability rule:** if the role's model is output-only (Imagen, TTS, Lyria), bare REPL chat falls back to the default chat model with no role system prompt. The role still configures `.image` / `.tts` / `.music` invocations.
 
+Roles may also opt into Gemini server-side built-in tools:
+
+```toml
+# ~/.config/genai/roles/research.toml
+model = "gemini-2.5-pro"
+system_prompt = "Cite sources when relevant."
+tools = ["google_search", "url_context"]
+```
+
 ## Sessions & storage
 
 Everything except attachments lives in a single SQLite DB:
@@ -219,7 +240,7 @@ GEMINI_API_KEY=... cargo run -p genai-models-gen
 - **TTS** assumes 16-bit mono PCM @ 24 kHz when wrapping into WAV (matches current Gemini output). Multi-channel TTS would need `pcm16_to_wav` adjustment.
 - **Markdown rendering is line-buffered.** Output appears at line granularity, not character granularity. Trade-off for streaming markdown without flicker.
 - **Realtime voice (Gemini Live API)** is not implemented. The chat REPL is text-only.
-- **Function calling, embeddings as a user feature, and RAG** are out of scope for v1.
+- **Client-side function/tool calling, embeddings as a user feature, and RAG** are not yet implemented. Gemini server-side built-in tools (`google_search`, `url_context`, `code_execution`) are wired up via roles and the `.tools` REPL command.
 - **Lyria** worked in the smoke test but is preview and may change request shape; if it breaks you'll see the server error verbatim — adjust `generate_music` in `gemini/tts.rs` if needed.
 
 ## Project layout

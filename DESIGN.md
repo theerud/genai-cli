@@ -11,12 +11,14 @@ A single-binary Rust CLI for day-to-day use of Google's Gemini API: REPL chat, o
 
 ## Scope (v1)
 
-In: chat REPL + one-off, sessions, roles, aliases, image gen, TTS, music gen, file attachments (input + output), markdown/code rendering.
-Out (deferred): realtime voice (Live API), embeddings as a user feature, function calling, RAG.
+In: chat REPL + one-off, sessions (named + ephemeral), roles, aliases, image gen, TTS, music gen, file attachments (input + output), markdown/code rendering, Gemini server-side built-in tools (`google_search`, `url_context`, `code_execution`), per-session token/cost tracking, `genai init` first-run wizard, `genai gc` for orphan blob cleanup.
+Out (deferred): realtime voice (Live API), embeddings as a user feature, client-side function/tool calling, RAG, MCP.
+
+Image default: prefer `gemini-2.5-flash-image` (nano-banana) over Imagen.
 
 ## Auth
 
-`GEMINI_API_KEY` env var wins; fall back to `api_key` in `config.toml`.
+Resolution order: process env (default `GEMINI_API_KEY`, name overridable via `api_key_env`) → `./.env` → `~/.config/genai/.env` → `api_key` field in `config.toml`.
 
 ## On-disk layout
 
@@ -52,12 +54,18 @@ message_attachments(message_id, attachment_hash)
 
 TOML files under `~/.config/genai/roles/<name>.toml`. Bundle model + system_prompt + params + optional capability defaults.
 
+Supported role fields: `model`, `system_prompt`, `temperature`, `max_tokens`, `thinking_level`, `output_dir`, `tools`.
+
 - CLI: `genai -r <role>` or `-r <role>` then drops to REPL.
 - REPL: `.role <name>` to switch, `.role -` to clear, `.role` lists.
 - **Orthogonal to sessions.** Role is a transient overlay on top of session config. A session created under a role inherits the role's settings as its defaults; subsequent role switches don't mutate the session.
 - **Capability rule for REPL chat:**
   - Chat-capable role → bare prompts use role's model + system prompt.
   - Output-only role (Imagen, TTS, Lyria) → bare prompts fall back to default chat model with no role system prompt. `.image`/`.tts`/etc. use the role's model.
+
+### Gemini server-side built-in tools
+
+Roles may enable Gemini server-side tools via `tools = ["google_search", "url_context", "code_execution"]`. These run in Gemini's infrastructure; no client-side execution loop. Toggle in-REPL with `.tools`. Client-side / custom function tools are a separate, future slice.
 
 ## Aliases
 
@@ -88,21 +96,32 @@ Rustyline-based. Prompt shape: `>`, `*>` (session, no role), `myrole>` (role, no
 | Command | Purpose |
 |---|---|
 | `.help`, `.exit` / `.quit` (Ctrl-D) | Basics |
-| `.info` | Show model / session / role / token usage |
+| `.info` | Show model / session / role / token usage / cost |
 | `.clear` | End current session, start anonymous |
-| `.session [name]`, `.session list`, `.session delete <name>`, `.session export <name> [path]`, `.session -` | Session control |
+| `.session` | Show current session state |
+| `.session start` | Begin an ephemeral session |
+| `.session save <name>` | Persist current ephemeral session under a name |
+| `.session switch <name-or-id>` | Resume a saved session |
+| `.session rename <name>` | Rename the current session |
+| `.session list` | List sessions with IDs |
+| `.session drop` | Discard the current ephemeral session |
+| `.session delete <name-or-id>` | Delete a saved session |
+| `.session export <name-or-id>` | Export as JSONL |
 | `.role [name]`, `.role list`, `.role -` | Role control |
 | `.model [name]`, `.model -` | Switch chat model / reset |
 | `.set <key> <value>` | Adjust params (temperature, max-tokens, ...) |
 | `.file <path>...` | Queue attachments for next message |
 | `.edit` | Open `$EDITOR` for multi-line prompt |
+| `.tools [name]` | List or toggle Gemini server-side built-in tools |
+| `.undo` | Drop the last completed turn from the session |
+| `.retry` | Re-run the previous user prompt |
 | `.image [-m model] [-o path] "prompt"` | Image generation |
 | `.tts [-m model] [-v voice] [-o path] "text"` | TTS |
 | `.music [-m model] [-o path] "prompt"` | Music (Lyria) |
 
-Convention: `<cmd> -` to reset / clear, mirrored across `.role`, `.session`, `.model`.
+Convention: `<cmd> -` to reset / clear, mirrored across `.role` and `.model`. Session resets use the explicit `start`/`drop` subcommands.
 
-Deferred: `.undo` (drop last completed turn), `.retry` (use up-arrow + Enter instead).
+Ephemeral session flow: `.session start` creates an unsaved session; leaving it (`.session switch`, `.clear`, or REPL exit) prompts to save, discard, or cancel when there are unsaved turns. New REPL starts may also offer to inherit anonymous history into a fresh session.
 
 ## Turn lifecycle
 

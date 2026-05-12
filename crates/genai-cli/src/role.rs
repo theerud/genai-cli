@@ -12,6 +12,8 @@ pub struct Role {
     pub max_tokens: Option<u32>,
     pub thinking_level: Option<String>,
     pub output_dir: Option<String>,
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
 
 pub fn roles_dir() -> Result<PathBuf> {

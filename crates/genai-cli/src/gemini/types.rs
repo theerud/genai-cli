@@ -58,6 +58,16 @@ pub struct GenerateContentRequest {
     pub system_instruction: Option<Content>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generation_config: Option<GenerationConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Tool>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tool {
+    GoogleSearch {},
+    UrlContext {},
+    CodeExecution {},
 }
 
 #[derive(Debug, Clone, Deserialize)]

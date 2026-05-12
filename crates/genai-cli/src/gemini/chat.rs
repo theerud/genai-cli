@@ -5,7 +5,7 @@ use std::pin::Pin;
 use super::Client;
 use super::types::{
     ApiErrorEnvelope, Content, GenerateContentRequest, GenerateContentResponse, GenerationConfig,
-    Part,
+    Part, Tool,
 };
 
 pub struct ChatRequest {
@@ -13,6 +13,7 @@ pub struct ChatRequest {
     pub contents: Vec<Content>,
     pub system_instruction: Option<String>,
     pub generation_config: Option<GenerationConfig>,
+    pub tools: Option<Vec<Tool>>,
 }
 
 pub enum ChatEvent {
@@ -41,6 +42,7 @@ impl Client {
                 parts: vec![Part::Text { text: t }],
             }),
             generation_config: req.generation_config,
+            tools: req.tools,
         };
 
         let resp = self

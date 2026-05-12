@@ -20,6 +20,7 @@ use crate::models::Registry;
 use crate::models::alias::{self, ResolvedModel};
 use crate::role::{self, Role};
 use crate::session::{ActiveSession, db::Database, messages_to_contents};
+use crate::tools;
 use commands::{ActionArgs, DotCmd, SessionCmd, parse as parse_cmd};
 use prompt::PromptState;
 use render::Renderer;
@@ -37,6 +38,7 @@ pub struct ReplState {
     pub pending_files: Vec<PathBuf>,
     pub session: Option<ActiveSession>,
     pub role: Option<Role>,
+    pub active_tools: Vec<String>,
     pub usage: UsageStats,
 }
 
@@ -104,6 +106,10 @@ impl ReplState {
             .as_ref()
             .and_then(|r| r.max_tokens)
             .or(cfg.model.chat.max_tokens);
+        let active_tools = role
+            .as_ref()
+            .map(|r| r.tools.clone())
+            .unwrap_or_default();
         Self {
             cfg,
             client,
@@ -117,6 +123,7 @@ impl ReplState {
             pending_files: Vec::new(),
             session,
             role,
+            active_tools,
             usage: UsageStats::default(),
         }
     }
@@ -262,6 +269,7 @@ async fn handle_command(state: &mut ReplState, cmd: DotCmd) -> Result<()> {
         DotCmd::Image(args) => handle_image_cmd(state, args).await?,
         DotCmd::Tts(args) => handle_tts_cmd(state, args).await?,
         DotCmd::Music(args) => handle_music_cmd(state, args).await?,
+        DotCmd::Tools(arg) => handle_tools_cmd(state, arg)?,
         DotCmd::Undo => handle_undo(state)?,
         DotCmd::Retry => handle_retry(state).await?,
         DotCmd::Unknown(msg) => eprintln!("{msg}"),
@@ -858,11 +866,48 @@ Commands:
   .session export <name-or-id>
                      export session as JSONL to stdout
   .role [name|list|-]       switch / list / clear role
+  .tools [list|name]        show / list / toggle built-in Gemini tools
   .image / .tts / .music    one-off generation in REPL
   .undo              drop last completed turn from history (+ session DB)
   .retry             re-run the last user message
 "
     );
+}
+
+fn handle_tools_cmd(state: &mut ReplState, arg: Option<String>) -> Result<()> {
+    match arg.as_deref() {
+        None => {
+            if state.active_tools.is_empty() {
+                eprintln!("tools: <none>");
+            } else {
+                eprintln!("tools: {}", state.active_tools.join(", "));
+            }
+        }
+        Some("list") => {
+            for name in tools::builtin_names() {
+                let marker = if state.active_tools.iter().any(|t| t == name) {
+                    "*"
+                } else {
+                    " "
+                };
+                eprintln!("{marker} {name}");
+            }
+        }
+        Some(name) => {
+            if tools::parse_builtin(name).is_none() {
+                anyhow::bail!("unknown built-in tool: {name}");
+            }
+            if state.active_tools.iter().any(|t| t == name) {
+                state.active_tools.retain(|t| t != name);
+                eprintln!("tool disabled: {name}");
+            } else {
+                tools::validate_enabled_tool(&state.registry, &state.model.id, name);
+                state.active_tools.push(name.to_string());
+                eprintln!("tool enabled: {name}");
+            }
+        }
+    }
+    Ok(())
 }
 
 fn handle_undo(state: &mut ReplState) -> Result<()> {
@@ -920,6 +965,9 @@ fn print_info(state: &ReplState) {
     if let Some(s) = &state.session {
         eprintln!("session:      {}", s.label());
     }
+    if !state.active_tools.is_empty() {
+        eprintln!("tools:        {}", state.active_tools.join(", "));
+    }
     if let Some(t) = state.temperature.or(state.model.temperature) {
         eprintln!("temperature:  {t}");
     }
@@ -941,6 +989,11 @@ fn print_info(state: &ReplState) {
     }
 }
 
+fn build_enabled_tools(names: &[String]) -> Option<Vec<crate::gemini::types::Tool>> {
+    let tools: Vec<_> = names.iter().filter_map(|n| tools::parse_builtin(n)).collect();
+    if tools.is_empty() { None } else { Some(tools) }
+}
+
 async fn chat_turn(state: &mut ReplState, user_text: String) -> Result<()> {
     let files = state.pending_files.clone();
     let (user_msg, attachments) = crate::session::build_user_message(user_text, &files)?;
@@ -953,6 +1006,7 @@ async fn chat_turn(state: &mut ReplState, user_text: String) -> Result<()> {
         contents,
         system_instruction: state.system_prompt.clone(),
         generation_config: state.build_generation_config(),
+        tools: build_enabled_tools(&state.active_tools),
     };
 
     let stream = state.client.stream_chat(req).await?;

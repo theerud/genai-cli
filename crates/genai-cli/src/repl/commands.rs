@@ -13,6 +13,7 @@ pub enum DotCmd {
     Image(ActionArgs),
     Tts(ActionArgs),
     Music(ActionArgs),
+    Tools(Option<String>),
     Undo,
     Retry,
     Unknown(String),
@@ -84,6 +85,7 @@ pub fn parse(line: &str) -> Option<DotCmd> {
             Ok(a) => DotCmd::Music(a),
             Err(e) => DotCmd::Unknown(format!(".music: {e}")),
         },
+        "tools" => DotCmd::Tools(opt_first(&tail)),
         _ => DotCmd::Unknown(format!("unknown command: .{head}")),
     };
     Some(cmd)
@@ -233,6 +235,12 @@ mod tests {
         assert!(matches!(parse(".session rename foo"), Some(DotCmd::Session(SessionCmd::Rename { .. }))));
         assert!(matches!(parse(".session list"), Some(DotCmd::Session(SessionCmd::List))));
         assert!(matches!(parse(".session drop"), Some(DotCmd::Session(SessionCmd::Drop))));
+    }
+
+    #[test]
+    fn tools_parse() {
+        assert!(matches!(parse(".tools"), Some(DotCmd::Tools(None))));
+        assert!(matches!(parse(".tools google_search"), Some(DotCmd::Tools(Some(_)))));
     }
 
     #[test]

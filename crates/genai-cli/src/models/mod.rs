@@ -46,6 +46,9 @@ pub const CAP_IMAGE_OUT: &str = "image_out";
 pub const CAP_TTS: &str = "tts";
 pub const CAP_MUSIC_OUT: &str = "music_out";
 pub const CAP_EMBED: &str = "embed";
+pub const CAP_TOOL_GOOGLE_SEARCH: &str = "tool_google_search";
+pub const CAP_TOOL_URL_CONTEXT: &str = "tool_url_context";
+pub const CAP_TOOL_CODE_EXECUTION: &str = "tool_code_execution";
 
 impl ModelEntry {
     pub fn has(&self, cap: &str) -> bool {

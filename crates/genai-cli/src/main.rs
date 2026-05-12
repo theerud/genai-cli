@@ -7,6 +7,7 @@ mod models;
 mod repl;
 mod role;
 mod session;
+mod tools;
 
 use anyhow::{Result, bail};
 use clap::Parser;
@@ -18,6 +19,7 @@ use gemini::Client;
 use gemini::chat::{ChatEvent, ChatRequest};
 use gemini::image::{self as image_api, ImageRequest, InputImage};
 use gemini::tts::{AudioOut, MusicRequest, TtsRequest, pcm16_to_wav};
+use tools as builtin_tools;
 use gemini::types::{Content, GenerationConfig, Part};
 use models::alias::{self, ResolvedModel};
 use repl::render::{self};
@@ -365,6 +367,14 @@ async fn run_one_shot_chat(
         .and_then(|r| r.system_prompt.clone())
         .or_else(|| cfg.model.chat.system_prompt.clone());
 
+    let enabled_tools = role
+        .as_ref()
+        .map(|r| r.tools.clone())
+        .unwrap_or_default();
+    for t in &enabled_tools {
+        builtin_tools::validate_enabled_tool(&registry, &resolved.id, t);
+    }
+
     let client = Client::new(api_key.to_string(), cfg.api_base().to_string())?;
 
     let files: Vec<PathBuf> = cli.file.iter().map(|s| PathBuf::from(expand(s))).collect();
@@ -377,6 +387,13 @@ async fn run_one_shot_chat(
         contents,
         system_instruction: system_prompt,
         generation_config: build_generation_config(cfg, &resolved),
+        tools: {
+            let tools: Vec<_> = enabled_tools
+                .iter()
+                .filter_map(|n| builtin_tools::parse_builtin(n))
+                .collect();
+            if tools.is_empty() { None } else { Some(tools) }
+        },
     };
 
     let mut stream = client.stream_chat(req).await?;
@@ -506,8 +523,8 @@ fn cmd_sessions_delete(name: &str) -> Result<()> {
 fn cmd_sessions_export(name: &str, output: Option<&str>) -> Result<()> {
     let db = open_db()?;
     let s = db
-        .get_session(name)?
-        .ok_or_else(|| anyhow::anyhow!("no session named {name}"))?;
+        .resolve_session_ref(name)?
+        .ok_or_else(|| anyhow::anyhow!("no session named/id {name}"))?;
     match output {
         None | Some("-") => session::export_jsonl(&db, &s, io::stdout().lock())?,
         Some(path) => {

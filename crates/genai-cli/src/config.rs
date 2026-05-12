@@ -1,0 +1,243 @@
+use anyhow::{Context, Result};
+use directories::ProjectDirs;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+const QUALIFIER: &str = "";
+const ORG: &str = "";
+const APP: &str = "genai";
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Config {
+    pub api_key: Option<String>,
+    pub api_key_env: Option<String>,
+    pub api_base: Option<String>,
+    #[serde(default)]
+    pub model: ModelDefaults,
+    #[serde(default)]
+    pub output: OutputPaths,
+    #[serde(default)]
+    pub repl: ReplConfig,
+    #[serde(default)]
+    pub aliases: BTreeMap<String, AliasEntry>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelDefaults {
+    #[serde(default)]
+    pub chat: ModelChat,
+    #[serde(default)]
+    pub image: ModelImage,
+    #[serde(default)]
+    pub tts: ModelTts,
+    #[serde(default)]
+    pub embed: ModelEmbed,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelChat {
+    pub default: Option<String>,
+    pub temperature: Option<f32>,
+    pub max_tokens: Option<u32>,
+    pub system_prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelImage {
+    pub default: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelTts {
+    pub default: Option<String>,
+    pub voice: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ModelEmbed {
+    pub default: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OutputPaths {
+    pub image_dir: Option<String>,
+    pub audio_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReplConfig {
+    pub color: Option<bool>,
+    pub markdown: Option<bool>,
+    pub history_size: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AliasEntry {
+    pub model: String,
+    pub temperature: Option<f32>,
+    pub thinking_level: Option<String>,
+}
+
+pub struct Paths {
+    pub config_dir: PathBuf,
+    pub data_dir: PathBuf,
+    pub cache_dir: PathBuf,
+}
+
+pub fn paths() -> Result<Paths> {
+    let pd = ProjectDirs::from(QUALIFIER, ORG, APP)
+        .context("could not determine XDG directories")?;
+    Ok(Paths {
+        config_dir: pd.config_dir().to_path_buf(),
+        data_dir: pd.data_dir().to_path_buf(),
+        cache_dir: pd.cache_dir().to_path_buf(),
+    })
+}
+
+pub fn load() -> Result<Config> {
+    let p = paths()?;
+    let cfg_path = p.config_dir.join("config.toml");
+    let mut cfg: Config = if cfg_path.exists() {
+        let s = std::fs::read_to_string(&cfg_path)
+            .with_context(|| format!("reading {}", cfg_path.display()))?;
+        toml::from_str(&s).with_context(|| format!("parsing {}", cfg_path.display()))?
+    } else {
+        Config::default()
+    };
+
+    if cfg.api_key.is_none() {
+        let env_var_name = cfg.api_key_env.as_deref().unwrap_or("GEMINI_API_KEY");
+        if let Some(value) = resolve_env_value(env_var_name, &p.config_dir)? {
+            if !value.is_empty() {
+                cfg.api_key = Some(value);
+            }
+        }
+    }
+
+    Ok(cfg)
+}
+
+/// Look up an env var name in this order: process env, CWD/.env, user-config-dir/.env.
+fn resolve_env_value(name: &str, config_dir: &Path) -> Result<Option<String>> {
+    if let Ok(v) = std::env::var(name) {
+        if !v.is_empty() {
+            return Ok(Some(v));
+        }
+    }
+    let cwd_env = std::env::current_dir().ok().map(|d| d.join(".env"));
+    let user_env = config_dir.join(".env");
+    for candidate in [cwd_env.as_deref(), Some(user_env.as_path())]
+        .into_iter()
+        .flatten()
+    {
+        if !candidate.exists() {
+            continue;
+        }
+        if let Some(v) = lookup_dotenv(candidate, name)? {
+            return Ok(Some(v));
+        }
+    }
+    Ok(None)
+}
+
+fn lookup_dotenv(path: &Path, name: &str) -> Result<Option<String>> {
+    let s = std::fs::read_to_string(path)
+        .with_context(|| format!("reading {}", path.display()))?;
+    for line in s.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let stripped = line.strip_prefix("export ").unwrap_or(line);
+        let Some((k, v)) = stripped.split_once('=') else {
+            continue;
+        };
+        if k.trim() != name {
+            continue;
+        }
+        return Ok(Some(unquote(v.trim()).to_string()));
+    }
+    Ok(None)
+}
+
+fn unquote(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return &s[1..s.len() - 1];
+        }
+    }
+    s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    #[test]
+    fn dotenv_picks_named_key() {
+        let dir = TempDir::new().unwrap();
+        let p = dir.path().join(".env");
+        let mut f = std::fs::File::create(&p).unwrap();
+        writeln!(f, "# comment").unwrap();
+        writeln!(f, "OTHER=ignored").unwrap();
+        writeln!(f, "GEMINI_API_KEY=secret123").unwrap();
+        drop(f);
+        let v = lookup_dotenv(&p, "GEMINI_API_KEY").unwrap();
+        assert_eq!(v.as_deref(), Some("secret123"));
+    }
+
+    #[test]
+    fn dotenv_handles_quotes_and_export() {
+        let dir = TempDir::new().unwrap();
+        let p = dir.path().join(".env");
+        let mut f = std::fs::File::create(&p).unwrap();
+        writeln!(f, "export FOO=\"quoted value\"").unwrap();
+        writeln!(f, "BAR='single quoted'").unwrap();
+        drop(f);
+        assert_eq!(
+            lookup_dotenv(&p, "FOO").unwrap().as_deref(),
+            Some("quoted value")
+        );
+        assert_eq!(
+            lookup_dotenv(&p, "BAR").unwrap().as_deref(),
+            Some("single quoted")
+        );
+    }
+
+    #[test]
+    fn dotenv_missing_key_returns_none() {
+        let dir = TempDir::new().unwrap();
+        let p = dir.path().join(".env");
+        std::fs::write(&p, "OTHER=ok\n").unwrap();
+        assert!(lookup_dotenv(&p, "MISSING").unwrap().is_none());
+    }
+}
+
+impl Config {
+    pub fn require_api_key(&self) -> Result<&str> {
+        self.api_key
+            .as_deref()
+            .filter(|k| !k.is_empty())
+            .context("no API key set — set GEMINI_API_KEY or write api_key in config.toml")
+    }
+
+    pub fn api_base(&self) -> &str {
+        self.api_base
+            .as_deref()
+            .unwrap_or("https://generativelanguage.googleapis.com")
+    }
+
+    pub fn default_chat_model(&self) -> &str {
+        self.model
+            .chat
+            .default
+            .as_deref()
+            .unwrap_or("gemini-2.5-flash")
+    }
+}

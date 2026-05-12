@@ -1,0 +1,231 @@
+# Bundled models registry. Hand-curated.
+# Refresh via `genai-models-gen` (dev tool) — it reports diffs against the live
+# Gemini API listing but does not write to this file.
+#
+# Pricing is best-effort and may lag the official rate card.
+
+# ---------- Chat ----------
+
+[[models]]
+id = "gemini-3.1-pro-preview"
+display_name = "Gemini 3.1 Pro (preview)"
+family = "gemini-3"
+capabilities = ["chat", "vision_in", "audio_in", "thinking", "function_calling"]
+context_window = 1048576
+max_output_tokens = 65536
+supports_thinking = true
+status = "preview"
+
+[[models]]
+id = "gemini-3-pro-preview"
+display_name = "Gemini 3 Pro (preview)"
+family = "gemini-3"
+capabilities = ["chat", "vision_in", "audio_in", "thinking", "function_calling"]
+context_window = 1048576
+max_output_tokens = 65536
+supports_thinking = true
+status = "preview"
+
+[[models]]
+id = "gemini-3-flash-preview"
+display_name = "Gemini 3 Flash (preview)"
+family = "gemini-3"
+capabilities = ["chat", "vision_in", "audio_in", "thinking", "function_calling"]
+context_window = 1048576
+max_output_tokens = 65536
+supports_thinking = true
+status = "preview"
+
+[[models]]
+id = "gemini-3.1-flash-lite-preview"
+display_name = "Gemini 3.1 Flash Lite (preview)"
+family = "gemini-3"
+capabilities = ["chat", "vision_in", "function_calling"]
+context_window = 1048576
+max_output_tokens = 65536
+status = "preview"
+
+[[models]]
+id = "gemini-3.1-flash-lite"
+display_name = "Gemini 3.1 Flash Lite"
+family = "gemini-3"
+capabilities = ["chat", "vision_in", "function_calling"]
+context_window = 1048576
+max_output_tokens = 65536
+status = "stable"
+
+[[models]]
+id = "gemini-pro-latest"
+display_name = "Gemini Pro (latest)"
+family = "gemini-latest"
+capabilities = ["chat", "vision_in", "audio_in", "thinking", "function_calling"]
+context_window = 1048576
+max_output_tokens = 65536
+supports_thinking = true
+status = "stable"
+
+[[models]]
+id = "gemini-flash-latest"
+display_name = "Gemini Flash (latest)"
+family = "gemini-latest"
+capabilities = ["chat", "vision_in", "audio_in", "thinking", "function_calling"]
+context_window = 1048576
+max_output_tokens = 65536
+supports_thinking = true
+status = "stable"
+
+[[models]]
+id = "gemini-flash-lite-latest"
+display_name = "Gemini Flash Lite (latest)"
+family = "gemini-latest"
+capabilities = ["chat", "vision_in", "function_calling"]
+context_window = 1048576
+max_output_tokens = 65536
+status = "stable"
+
+[[models]]
+id = "gemini-2.5-pro"
+display_name = "Gemini 2.5 Pro"
+family = "gemini-2.5"
+capabilities = ["chat", "vision_in", "audio_in", "thinking", "function_calling"]
+context_window = 1048576
+max_output_tokens = 65536
+input_price_per_1m = 1.25
+output_price_per_1m = 10.0
+supports_thinking = true
+status = "stable"
+
+[[models]]
+id = "gemini-2.5-flash"
+display_name = "Gemini 2.5 Flash"
+family = "gemini-2.5"
+capabilities = ["chat", "vision_in", "audio_in", "thinking", "function_calling"]
+context_window = 1048576
+max_output_tokens = 65536
+input_price_per_1m = 0.3
+output_price_per_1m = 2.5
+supports_thinking = true
+status = "stable"
+
+[[models]]
+id = "gemini-2.5-flash-lite"
+display_name = "Gemini 2.5 Flash-Lite"
+family = "gemini-2.5"
+capabilities = ["chat", "vision_in", "function_calling"]
+context_window = 1048576
+max_output_tokens = 65536
+status = "stable"
+
+# ---------- Image generation ----------
+
+[[models]]
+id = "imagen-4.0-generate-001"
+display_name = "Imagen 4"
+family = "imagen"
+capabilities = ["image_out"]
+status = "stable"
+
+[[models]]
+id = "imagen-4.0-fast-generate-001"
+display_name = "Imagen 4 Fast"
+family = "imagen"
+capabilities = ["image_out"]
+status = "stable"
+
+[[models]]
+id = "imagen-4.0-ultra-generate-001"
+display_name = "Imagen 4 Ultra"
+family = "imagen"
+capabilities = ["image_out"]
+status = "stable"
+
+[[models]]
+id = "gemini-2.5-flash-image"
+display_name = "Gemini 2.5 Flash Image (Nano Banana)"
+family = "gemini-2.5"
+capabilities = ["image_out", "vision_in"]
+context_window = 32768
+max_output_tokens = 32768
+status = "stable"
+
+[[models]]
+id = "nano-banana-pro-preview"
+display_name = "Nano Banana Pro (preview)"
+family = "gemini-3"
+capabilities = ["image_out", "vision_in"]
+context_window = 131072
+status = "preview"
+
+[[models]]
+id = "gemini-3-pro-image-preview"
+display_name = "Gemini 3 Pro Image (preview)"
+family = "gemini-3"
+capabilities = ["image_out", "vision_in"]
+context_window = 131072
+status = "preview"
+
+[[models]]
+id = "gemini-3.1-flash-image-preview"
+display_name = "Gemini 3.1 Flash Image (preview)"
+family = "gemini-3"
+capabilities = ["image_out", "vision_in"]
+context_window = 65536
+status = "preview"
+
+# ---------- Text-to-speech ----------
+
+[[models]]
+id = "gemini-3.1-flash-tts-preview"
+display_name = "Gemini 3.1 Flash TTS (preview)"
+family = "gemini-3"
+capabilities = ["tts"]
+status = "preview"
+
+[[models]]
+id = "gemini-2.5-flash-preview-tts"
+display_name = "Gemini 2.5 Flash TTS (preview)"
+family = "gemini-2.5"
+capabilities = ["tts"]
+status = "preview"
+
+[[models]]
+id = "gemini-2.5-pro-preview-tts"
+display_name = "Gemini 2.5 Pro TTS (preview)"
+family = "gemini-2.5"
+capabilities = ["tts"]
+status = "preview"
+
+# ---------- Music (Lyria) ----------
+# Lyria models may not appear in /v1beta/models — confirm availability for your
+# account before invoking.
+
+[[models]]
+id = "lyria-3-pro-preview"
+display_name = "Lyria 3 Pro (preview)"
+family = "lyria"
+capabilities = ["music_out"]
+status = "preview"
+
+[[models]]
+id = "lyria-3-clip-preview"
+display_name = "Lyria 3 Clip (preview)"
+family = "lyria"
+capabilities = ["music_out"]
+status = "preview"
+
+# ---------- Embeddings ----------
+
+[[models]]
+id = "gemini-embedding-2"
+display_name = "Gemini Embedding 2"
+family = "gemini-embedding"
+capabilities = ["embed"]
+context_window = 8192
+status = "stable"
+
+[[models]]
+id = "gemini-embedding-001"
+display_name = "Gemini Embedding 001"
+family = "gemini-embedding"
+capabilities = ["embed"]
+status = "stable"

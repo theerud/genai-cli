@@ -1,0 +1,173 @@
+#[derive(Debug, Clone)]
+pub enum DotCmd {
+    Help,
+    Exit,
+    Info,
+    Clear,
+    Model(Option<String>),
+    Set { key: String, value: String },
+    File(Vec<String>),
+    Edit,
+    Role(Option<String>),
+    Session(Option<String>),
+    Image(ActionArgs),
+    Tts(ActionArgs),
+    Music(ActionArgs),
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ActionArgs {
+    pub model: Option<String>,
+    pub output: Option<String>,
+    pub files: Vec<String>,
+    pub voice: Option<String>,
+    pub prompt: String,
+}
+
+pub fn parse(line: &str) -> Option<DotCmd> {
+    let line = line.trim();
+    let rest = line.strip_prefix('.')?;
+    let mut parts = rest.split_whitespace();
+    let head = parts.next().unwrap_or("");
+    let tail: Vec<&str> = parts.collect();
+    let cmd = match head {
+        "help" | "h" | "?" => DotCmd::Help,
+        "exit" | "quit" | "q" => DotCmd::Exit,
+        "info" => DotCmd::Info,
+        "clear" => DotCmd::Clear,
+        "model" => DotCmd::Model(opt_first(&tail)),
+        "set" => {
+            if tail.len() < 2 {
+                DotCmd::Unknown(".set requires <key> <value>".to_string())
+            } else {
+                DotCmd::Set {
+                    key: tail[0].to_string(),
+                    value: tail[1..].join(" "),
+                }
+            }
+        }
+        "file" => DotCmd::File(tail.iter().map(|s| s.to_string()).collect()),
+        "edit" => DotCmd::Edit,
+        "role" => DotCmd::Role(opt_first(&tail)),
+        "session" => DotCmd::Session(opt_first(&tail)),
+        "image" => match parse_action_args(&tail) {
+            Ok(a) => DotCmd::Image(a),
+            Err(e) => DotCmd::Unknown(format!(".image: {e}")),
+        },
+        "tts" => match parse_action_args(&tail) {
+            Ok(a) => DotCmd::Tts(a),
+            Err(e) => DotCmd::Unknown(format!(".tts: {e}")),
+        },
+        "music" => match parse_action_args(&tail) {
+            Ok(a) => DotCmd::Music(a),
+            Err(e) => DotCmd::Unknown(format!(".music: {e}")),
+        },
+        _ => DotCmd::Unknown(format!("unknown command: .{head}")),
+    };
+    Some(cmd)
+}
+
+fn parse_action_args(tail: &[&str]) -> Result<ActionArgs, String> {
+    let mut a = ActionArgs::default();
+    let mut i = 0;
+    let mut prompt_tokens: Vec<&str> = Vec::new();
+    while i < tail.len() {
+        match tail[i] {
+            "-m" | "--model" => {
+                i += 1;
+                a.model = Some(tail.get(i).ok_or("missing value for -m")?.to_string());
+            }
+            "-o" | "--output" => {
+                i += 1;
+                a.output = Some(tail.get(i).ok_or("missing value for -o")?.to_string());
+            }
+            "-f" | "--file" => {
+                i += 1;
+                a.files
+                    .push(tail.get(i).ok_or("missing value for -f")?.to_string());
+            }
+            "-v" | "--voice" => {
+                i += 1;
+                a.voice = Some(tail.get(i).ok_or("missing value for -v")?.to_string());
+            }
+            other => prompt_tokens.push(other),
+        }
+        i += 1;
+    }
+    a.prompt = strip_quotes(&prompt_tokens.join(" "));
+    if a.prompt.is_empty() {
+        return Err("prompt is required".to_string());
+    }
+    Ok(a)
+}
+
+fn strip_quotes(s: &str) -> String {
+    let trimmed = s.trim();
+    if (trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2)
+        || (trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() >= 2)
+    {
+        trimmed[1..trimmed.len() - 1].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn opt_first(tail: &[&str]) -> Option<String> {
+    tail.first().map(|s| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn not_a_dot_command() {
+        assert!(parse("hello world").is_none());
+    }
+
+    #[test]
+    fn help_variants() {
+        assert!(matches!(parse(".help"), Some(DotCmd::Help)));
+        assert!(matches!(parse(".h"), Some(DotCmd::Help)));
+        assert!(matches!(parse(".?"), Some(DotCmd::Help)));
+    }
+
+    #[test]
+    fn model_with_arg() {
+        assert!(matches!(parse(".model foo"), Some(DotCmd::Model(Some(_)))));
+        assert!(matches!(parse(".model"), Some(DotCmd::Model(None))));
+    }
+
+    #[test]
+    fn image_parses_args_and_prompt() {
+        match parse(".image -m imagen-4 -o out.png a cat on the moon") {
+            Some(DotCmd::Image(a)) => {
+                assert_eq!(a.model.as_deref(), Some("imagen-4"));
+                assert_eq!(a.output.as_deref(), Some("out.png"));
+                assert_eq!(a.prompt, "a cat on the moon");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn image_strips_outer_quotes() {
+        match parse(r#".image "a quoted prompt""#) {
+            Some(DotCmd::Image(a)) => assert_eq!(a.prompt, "a quoted prompt"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_requires_value() {
+        match parse(".set temperature 0.7") {
+            Some(DotCmd::Set { key, value }) => {
+                assert_eq!(key, "temperature");
+                assert_eq!(value, "0.7");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert!(matches!(parse(".set foo"), Some(DotCmd::Unknown(_))));
+    }
+}

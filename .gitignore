@@ -1,0 +1,16 @@
+/target
+Cargo.lock.bak
+
+# Local secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Scratch space (per workspace convention)
+tmp/
+
+# Editor / OS noise
+*.swp
+.DS_Store
+.idea/
+.vscode/

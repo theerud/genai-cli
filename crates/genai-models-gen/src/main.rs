@@ -30,8 +30,6 @@ struct BundledEntry {
     status: Option<String>,
     #[serde(default)]
     context_window: u32,
-    #[serde(default)]
-    capabilities: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,12 +46,6 @@ struct ApiModel {
     display_name: Option<String>,
     #[serde(default)]
     input_token_limit: Option<u32>,
-    #[serde(default)]
-    output_token_limit: Option<u32>,
-    #[serde(default)]
-    supported_generation_methods: Vec<String>,
-    #[serde(default)]
-    description: Option<String>,
 }
 
 #[tokio::main]
@@ -191,22 +183,20 @@ fn strip_model_prefix(s: &str) -> &str {
 
 fn diff_fields(b: &BundledEntry, a: &ApiModel) -> Vec<String> {
     let mut out = Vec::new();
-    if let Some(api_ctx) = a.input_token_limit {
-        if b.context_window != 0 && b.context_window != api_ctx {
+    if let Some(api_ctx) = a.input_token_limit
+        && b.context_window != 0 && b.context_window != api_ctx {
             out.push(format!(
                 "context_window: bundled={} api={api_ctx}",
                 b.context_window
             ));
         }
-    }
     // Note: we don't infer a 'chat' capability from generateContent support —
     // image, TTS, music, and embedding models all expose generateContent for
     // their respective output modalities. The bundled `capabilities` list is
     // authoritative.
-    if let Some(api_name) = &a.display_name {
-        if !api_name.is_empty() && b.status.as_deref() == Some("deprecated") {
+    if let Some(api_name) = &a.display_name
+        && !api_name.is_empty() && b.status.as_deref() == Some("deprecated") {
             out.push(format!("api still lists '{api_name}' but bundled status is deprecated"));
         }
-    }
     out
 }

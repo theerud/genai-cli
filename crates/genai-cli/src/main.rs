@@ -1,6 +1,5 @@
 mod cli;
 mod config;
-mod error;
 mod gemini;
 mod init;
 mod models;
@@ -169,19 +168,17 @@ fn write_audio(output: &str, audio: &AudioOut) -> Result<()> {
         .map(|s| s.to_lowercase());
     if user_ext.is_none() {
         path.set_extension(ext);
-    } else if let Some(u) = &user_ext {
-        if u != ext && ext != "bin" {
+    } else if let Some(u) = &user_ext
+        && u != ext && ext != "bin" {
             eprintln!(
                 "warning: writing {} content to .{} file ({} would match the data)",
                 audio.mime, u, ext
             );
         }
-    }
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
-    }
     std::fs::write(&path, &*bytes)?;
     eprintln!("wrote {} ({})", path.display(), audio.mime);
     Ok(())
@@ -234,11 +231,10 @@ fn write_images(output: &str, images: &[gemini::image::ImageOut]) -> Result<()> 
     }
     if images.len() == 1 {
         let path = PathBuf::from(expand(output));
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)?;
             }
-        }
         std::fs::write(&path, &images[0].bytes)?;
         eprintln!("wrote {}", path.display());
         return Ok(());
@@ -349,8 +345,8 @@ async fn run_one_shot_chat(
         .or_else(|| active.as_ref().and_then(|s| s.db_session.model.clone()))
         .unwrap_or_else(|| cfg.default_chat_model().to_string());
     let mut resolved = alias::resolve(cfg, &requested);
-    if let Some(r) = &role {
-        if role_chat_capable {
+    if let Some(r) = &role
+        && role_chat_capable {
             if let Some(t) = &r.thinking_level {
                 resolved.thinking_level = Some(t.clone());
             }
@@ -358,8 +354,7 @@ async fn run_one_shot_chat(
                 resolved.temperature = Some(t);
             }
         }
-    }
-    models::validate(&registry, &resolved.id, models::CAP_CHAT);
+    models::validate(registry, &resolved.id, models::CAP_CHAT);
 
     let system_prompt = role
         .as_ref()
@@ -372,7 +367,7 @@ async fn run_one_shot_chat(
         .map(|r| r.tools.clone())
         .unwrap_or_default();
     for t in &enabled_tools {
-        builtin_tools::validate_enabled_tool(&registry, &resolved.id, t);
+        builtin_tools::validate_enabled_tool(registry, &resolved.id, t);
     }
 
     let client = Client::new(api_key.to_string(), cfg.api_base().to_string())?;
@@ -543,10 +538,9 @@ fn cmd_gc() -> Result<()> {
 }
 
 fn expand(s: &str) -> String {
-    if let Some(rest) = s.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
+    if let Some(rest) = s.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME") {
             return format!("{home}/{rest}");
         }
-    }
     s.to_string()
 }

@@ -94,8 +94,6 @@ pub struct UsageMetadata {
     pub prompt_token_count: Option<u32>,
     #[serde(default)]
     pub candidates_token_count: Option<u32>,
-    #[serde(default)]
-    pub total_token_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -105,7 +103,5 @@ pub struct ApiErrorEnvelope {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ApiError {
-    pub code: Option<i32>,
     pub message: String,
-    pub status: Option<String>,
 }

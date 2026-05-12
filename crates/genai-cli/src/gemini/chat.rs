@@ -19,10 +19,8 @@ pub struct ChatRequest {
 pub enum ChatEvent {
     TextDelta(String),
     Finish {
-        reason: Option<String>,
         prompt_tokens: Option<u32>,
         output_tokens: Option<u32>,
-        total_tokens: Option<u32>,
     },
 }
 
@@ -84,7 +82,7 @@ fn parse_sse_data(data: &str) -> Result<Vec<ChatEvent>> {
         serde_json::from_str(data).with_context(|| format!("parsing SSE data: {data}"))?;
 
     let mut text = String::new();
-    let mut finish_reason = None;
+    let mut has_finish = false;
     for c in &resp.candidates {
         if let Some(content) = &c.content {
             for part in &content.parts {
@@ -94,7 +92,7 @@ fn parse_sse_data(data: &str) -> Result<Vec<ChatEvent>> {
             }
         }
         if c.finish_reason.is_some() {
-            finish_reason.clone_from(&c.finish_reason);
+            has_finish = true;
         }
     }
 
@@ -103,16 +101,14 @@ fn parse_sse_data(data: &str) -> Result<Vec<ChatEvent>> {
         out.push(ChatEvent::TextDelta(text));
     }
     let usage = resp.usage_metadata;
-    if finish_reason.is_some() || usage.is_some() {
-        let (prompt_tokens, output_tokens, total_tokens) = match &usage {
-            Some(u) => (u.prompt_token_count, u.candidates_token_count, u.total_token_count),
-            None => (None, None, None),
+    if has_finish || usage.is_some() {
+        let (prompt_tokens, output_tokens) = match &usage {
+            Some(u) => (u.prompt_token_count, u.candidates_token_count),
+            None => (None, None),
         };
         out.push(ChatEvent::Finish {
-            reason: finish_reason,
             prompt_tokens,
             output_tokens,
-            total_tokens,
         });
     }
     Ok(out)
@@ -129,8 +125,7 @@ where
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| anyhow!("http stream: {e}"))?;
             buf.push_str(&String::from_utf8_lossy(&chunk));
-            loop {
-                let Some(idx) = find_event_terminator(&buf) else { break; };
+            while let Some(idx) = find_event_terminator(&buf) {
                 let (event, rest) = buf.split_at(idx.end);
                 let data = extract_data(&event[..idx.start]);
                 let rest = rest.to_string();
@@ -140,11 +135,10 @@ where
                 }
             }
         }
-        if !buf.is_empty() {
-            if let Some(d) = extract_data(&buf) {
+        if !buf.is_empty()
+            && let Some(d) = extract_data(&buf) {
                 yield Ok(d);
             }
-        }
     }
 }
 

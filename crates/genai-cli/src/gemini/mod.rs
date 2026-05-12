@@ -1,5 +1,4 @@
 pub mod chat;
-pub mod embed;
 pub mod image;
 pub mod tts;
 pub mod types;

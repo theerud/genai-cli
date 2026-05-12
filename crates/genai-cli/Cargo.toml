@@ -22,7 +22,6 @@ crossterm.workspace = true
 directories.workspace = true
 sha2.workspace = true
 syntect.workspace = true
-thiserror.workspace = true
 anyhow.workspace = true
 futures-util.workspace = true
 async-stream.workspace = true

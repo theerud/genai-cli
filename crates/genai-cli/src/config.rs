@@ -108,11 +108,10 @@ pub fn load() -> Result<Config> {
 
     if cfg.api_key.is_none() {
         let env_var_name = cfg.api_key_env.as_deref().unwrap_or("GEMINI_API_KEY");
-        if let Some(value) = resolve_env_value(env_var_name, &p.config_dir)? {
-            if !value.is_empty() {
+        if let Some(value) = resolve_env_value(env_var_name, &p.config_dir)?
+            && !value.is_empty() {
                 cfg.api_key = Some(value);
             }
-        }
     }
 
     Ok(cfg)
@@ -120,11 +119,10 @@ pub fn load() -> Result<Config> {
 
 /// Look up an env var name in this order: process env, CWD/.env, user-config-dir/.env.
 fn resolve_env_value(name: &str, config_dir: &Path) -> Result<Option<String>> {
-    if let Ok(v) = std::env::var(name) {
-        if !v.is_empty() {
+    if let Ok(v) = std::env::var(name)
+        && !v.is_empty() {
             return Ok(Some(v));
         }
-    }
     let cwd_env = std::env::current_dir().ok().map(|d| d.join(".env"));
     let user_env = config_dir.join(".env");
     for candidate in [cwd_env.as_deref(), Some(user_env.as_path())]
@@ -173,6 +171,29 @@ fn unquote(s: &str) -> &str {
     s
 }
 
+impl Config {
+    pub fn require_api_key(&self) -> Result<&str> {
+        self.api_key
+            .as_deref()
+            .filter(|k| !k.is_empty())
+            .context("no API key set — set GEMINI_API_KEY or write api_key in config.toml")
+    }
+
+    pub fn api_base(&self) -> &str {
+        self.api_base
+            .as_deref()
+            .unwrap_or("https://generativelanguage.googleapis.com")
+    }
+
+    pub fn default_chat_model(&self) -> &str {
+        self.model
+            .chat
+            .default
+            .as_deref()
+            .unwrap_or("gemini-2.5-flash")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,28 +237,5 @@ mod tests {
         let p = dir.path().join(".env");
         std::fs::write(&p, "OTHER=ok\n").unwrap();
         assert!(lookup_dotenv(&p, "MISSING").unwrap().is_none());
-    }
-}
-
-impl Config {
-    pub fn require_api_key(&self) -> Result<&str> {
-        self.api_key
-            .as_deref()
-            .filter(|k| !k.is_empty())
-            .context("no API key set — set GEMINI_API_KEY or write api_key in config.toml")
-    }
-
-    pub fn api_base(&self) -> &str {
-        self.api_base
-            .as_deref()
-            .unwrap_or("https://generativelanguage.googleapis.com")
-    }
-
-    pub fn default_chat_model(&self) -> &str {
-        self.model
-            .chat
-            .default
-            .as_deref()
-            .unwrap_or("gemini-2.5-flash")
     }
 }

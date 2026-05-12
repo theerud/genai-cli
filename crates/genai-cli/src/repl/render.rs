@@ -350,38 +350,35 @@ fn inline(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'*' {
-            if let Some(end) = find_pair(s, i + 2, "**") {
+        if bytes[i] == b'*' && i + 1 < bytes.len() && bytes[i + 1] == b'*'
+            && let Some(end) = find_pair(s, i + 2, "**") {
                 out.push_str(BOLD);
                 out.push_str(&s[i + 2..end]);
                 out.push_str(RESET);
                 i = end + 2;
                 continue;
             }
-        }
         if (bytes[i] == b'*' || bytes[i] == b'_') && !is_word_boundary(s, i) {
             // skip — likely inside a word
         } else if bytes[i] == b'*' || bytes[i] == b'_' {
             let marker = &s[i..i + 1];
-            if let Some(end) = find_pair(s, i + 1, marker) {
-                if end > i + 1 {
+            if let Some(end) = find_pair(s, i + 1, marker)
+                && end > i + 1 {
                     out.push_str(ITAL);
                     out.push_str(&s[i + 1..end]);
                     out.push_str(RESET);
                     i = end + 1;
                     continue;
                 }
-            }
         }
-        if bytes[i] == b'`' {
-            if let Some(end) = find_pair(s, i + 1, "`") {
+        if bytes[i] == b'`'
+            && let Some(end) = find_pair(s, i + 1, "`") {
                 out.push_str(YELLOW);
                 out.push_str(&s[i + 1..end]);
                 out.push_str(RESET);
                 i = end + 1;
                 continue;
             }
-        }
         out.push(s[i..].chars().next().unwrap());
         i += s[i..].chars().next().unwrap().len_utf8();
     }

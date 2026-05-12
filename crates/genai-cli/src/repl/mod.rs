@@ -339,12 +339,11 @@ fn maybe_prompt_save_on_exit(state: &mut ReplState) -> Result<bool> {
 }
 
 fn start_ephemeral_session(state: &mut ReplState) -> Result<()> {
-    if let Some(s) = &state.session {
-        if s.ephemeral {
+    if let Some(s) = &state.session
+        && s.ephemeral {
             eprintln!("(already in a temporary session)");
             return Ok(());
         }
-    }
     let temp_name = format!("__tmp_repl_{}", std::process::id());
     let session = state
         .db
@@ -738,19 +737,17 @@ fn write_audio(output: &str, audio: &AudioOut) -> Result<()> {
         .map(|s| s.to_lowercase());
     if user_ext.is_none() {
         path.set_extension(ext);
-    } else if let Some(u) = &user_ext {
-        if u != ext && ext != "bin" {
+    } else if let Some(u) = &user_ext
+        && u != ext && ext != "bin" {
             eprintln!(
                 "warning: writing {} content to .{} file ({} would match the data)",
                 audio.mime, u, ext
             );
         }
-    }
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
-    }
     std::fs::write(&path, &*bytes)?;
     eprintln!("wrote {} ({})", path.display(), audio.mime);
     Ok(())
@@ -792,11 +789,10 @@ fn write_images(output: &str, images: &[crate::gemini::image::ImageOut]) -> Resu
     }
     if images.len() == 1 {
         let path = PathBuf::from(shellexpand(output));
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)?;
             }
-        }
         std::fs::write(&path, &images[0].bytes)?;
         eprintln!("wrote {}", path.display());
         return Ok(());
@@ -1105,10 +1101,9 @@ fn edit_via_editor() -> Result<Option<String>> {
 }
 
 fn shellexpand(s: &str) -> String {
-    if let Some(rest) = s.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
+    if let Some(rest) = s.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME") {
             return format!("{home}/{rest}");
         }
-    }
     s.to_string()
 }

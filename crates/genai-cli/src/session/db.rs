@@ -21,7 +21,6 @@ pub struct SessionSummary {
     pub id: i64,
     pub name: String,
     pub model: Option<String>,
-    pub updated_at: String,
     pub message_count: i64,
 }
 
@@ -132,13 +131,11 @@ impl Database {
     }
 
     pub fn resolve_session_ref(&self, value: &str) -> Result<Option<Session>> {
-        if let Ok(id) = value.parse::<i64>() {
-            if id > 0 {
-                if let Some(s) = self.get_session_by_id(id)? {
+        if let Ok(id) = value.parse::<i64>()
+            && id > 0
+                && let Some(s) = self.get_session_by_id(id)? {
                     return Ok(Some(s));
                 }
-            }
-        }
         self.get_session(value)
     }
 
@@ -177,7 +174,7 @@ impl Database {
 
     pub fn list_sessions(&self) -> Result<Vec<SessionSummary>> {
         let mut stmt = self.conn.prepare(
-            "SELECT s.id, s.name, s.model, s.updated_at, COUNT(m.id) \
+            "SELECT s.id, s.name, s.model, COUNT(m.id) \
              FROM sessions s LEFT JOIN messages m ON m.session_id = s.id \
              GROUP BY s.id ORDER BY s.updated_at DESC",
         )?;
@@ -187,8 +184,7 @@ impl Database {
                     id: r.get(0)?,
                     name: r.get(1)?,
                     model: r.get(2)?,
-                    updated_at: r.get(3)?,
-                    message_count: r.get(4)?,
+                    message_count: r.get(3)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -196,14 +192,13 @@ impl Database {
     }
 
     pub fn delete_session_ref(&mut self, value: &str) -> Result<bool> {
-        if let Ok(id) = value.parse::<i64>() {
-            if id > 0 {
+        if let Ok(id) = value.parse::<i64>()
+            && id > 0 {
                 let n = self
                     .conn
                     .execute("DELETE FROM sessions WHERE id = ?1", params![id])?;
                 return Ok(n > 0);
             }
-        }
         let n = self
             .conn
             .execute("DELETE FROM sessions WHERE name = ?1", params![value])?;

@@ -161,8 +161,8 @@ impl Client {
         for c in parsed.candidates {
             let Some(content) = c.content else { continue };
             for part in content.parts {
-                if let Part::InlineData { inline_data } = part {
-                    if inline_data.mime_type.starts_with("image/") {
+                if let Part::InlineData { inline_data } = part
+                    && inline_data.mime_type.starts_with("image/") {
                         let bytes = base64::engine::general_purpose::STANDARD
                             .decode(inline_data.data.as_bytes())
                             .context("decoding gemini image base64")?;
@@ -171,7 +171,6 @@ impl Client {
                             bytes,
                         });
                     }
-                }
             }
         }
         if out.is_empty() {

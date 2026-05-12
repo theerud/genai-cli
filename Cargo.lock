@@ -592,7 +592,6 @@ dependencies = [
  "sha2",
  "syntect",
  "tempfile",
- "thiserror",
  "tokio",
  "toml",
 ]

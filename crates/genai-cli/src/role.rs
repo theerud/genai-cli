@@ -44,11 +44,10 @@ pub fn list_available() -> Result<Vec<String>> {
     for entry in std::fs::read_dir(&dir)? {
         let entry = entry?;
         let p = entry.path();
-        if p.extension().and_then(|e| e.to_str()) == Some("toml") {
-            if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+        if p.extension().and_then(|e| e.to_str()) == Some("toml")
+            && let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
                 out.push(stem.to_string());
             }
-        }
     }
     out.sort();
     Ok(out)

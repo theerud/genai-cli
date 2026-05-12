@@ -86,6 +86,16 @@ pub struct Paths {
 }
 
 pub fn paths() -> Result<Paths> {
+    if let Ok(home) = std::env::var("GENAI_HOME")
+        && !home.is_empty()
+    {
+        let root = PathBuf::from(home);
+        return Ok(Paths {
+            config_dir: root.join("config"),
+            data_dir: root.join("data"),
+            cache_dir: root.join("cache"),
+        });
+    }
     let pd = ProjectDirs::from(QUALIFIER, ORG, APP)
         .context("could not determine XDG directories")?;
     Ok(Paths {

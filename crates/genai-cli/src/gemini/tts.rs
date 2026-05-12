@@ -147,6 +147,22 @@ fn parse_sample_rate(mime: &str) -> Option<u32> {
     None
 }
 
+/// Natural file extension for an audio MIME type.
+pub fn extension_for_mime(mime: &str) -> &'static str {
+    if mime.starts_with("audio/L16") || mime.starts_with("audio/pcm") {
+        return "wav";
+    }
+    match mime {
+        "audio/wav" | "audio/x-wav" => "wav",
+        "audio/mpeg" | "audio/mp3" => "mp3",
+        "audio/ogg" => "ogg",
+        "audio/flac" => "flac",
+        "audio/aac" => "aac",
+        "audio/opus" => "opus",
+        _ => "bin",
+    }
+}
+
 /// Wrap raw 16-bit little-endian PCM into a WAV file blob.
 pub fn pcm16_to_wav(pcm: &[u8], sample_rate: u32, channels: u16) -> Vec<u8> {
     let byte_rate = sample_rate * (channels as u32) * 2;

@@ -489,22 +489,16 @@ async fn handle_music_cmd(state: &mut ReplState, args: ActionArgs) -> Result<()>
 }
 
 fn write_audio(output: &str, audio: &AudioOut) -> Result<()> {
+    let natural_ext = crate::gemini::tts::extension_for_mime(&audio.mime);
     let (bytes, ext): (std::borrow::Cow<[u8]>, &str) =
         if audio.mime.starts_with("audio/L16") || audio.mime.starts_with("audio/pcm") {
             let sr = audio.sample_rate.unwrap_or(24000);
             (
                 std::borrow::Cow::Owned(pcm16_to_wav(&audio.bytes, sr, 1)),
-                "wav",
+                natural_ext,
             )
         } else {
-            let ext = match audio.mime.as_str() {
-                "audio/wav" | "audio/x-wav" => "wav",
-                "audio/mpeg" | "audio/mp3" => "mp3",
-                "audio/ogg" => "ogg",
-                "audio/flac" => "flac",
-                _ => "bin",
-            };
-            (std::borrow::Cow::Borrowed(&audio.bytes), ext)
+            (std::borrow::Cow::Borrowed(&audio.bytes), natural_ext)
         };
 
     if output == "-" {
@@ -514,8 +508,19 @@ fn write_audio(output: &str, audio: &AudioOut) -> Result<()> {
     }
 
     let mut path = PathBuf::from(shellexpand(output));
-    if path.extension().is_none() {
+    let user_ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase());
+    if user_ext.is_none() {
         path.set_extension(ext);
+    } else if let Some(u) = &user_ext {
+        if u != ext && ext != "bin" {
+            eprintln!(
+                "warning: writing {} content to .{} file ({} would match the data)",
+                audio.mime, u, ext
+            );
+        }
     }
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {

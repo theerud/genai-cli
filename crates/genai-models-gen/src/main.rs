@@ -199,13 +199,10 @@ fn diff_fields(b: &BundledEntry, a: &ApiModel) -> Vec<String> {
             ));
         }
     }
-    let has_streaming = a
-        .supported_generation_methods
-        .iter()
-        .any(|m| m == "streamGenerateContent" || m == "generateContent");
-    if has_streaming && !b.capabilities.iter().any(|c| c == "chat") {
-        out.push("api supports generateContent but capabilities lacks 'chat'".to_string());
-    }
+    // Note: we don't infer a 'chat' capability from generateContent support —
+    // image, TTS, music, and embedding models all expose generateContent for
+    // their respective output modalities. The bundled `capabilities` list is
+    // authoritative.
     if let Some(api_name) = &a.display_name {
         if !api_name.is_empty() && b.status.as_deref() == Some("deprecated") {
             out.push(format!("api still lists '{api_name}' but bundled status is deprecated"));

@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::gemini::types::{Content, Part};
 
 pub struct Database {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 #[derive(Debug, Clone)]

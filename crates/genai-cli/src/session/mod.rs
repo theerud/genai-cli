@@ -4,7 +4,7 @@ pub mod db;
 use anyhow::Result;
 use base64::Engine;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::config;
 use crate::gemini::types::{Content, InlineData, Part};
@@ -13,14 +13,26 @@ use db::{Database, MessageRecord, Session as DbSession, SessionSummary};
 
 pub struct ActiveSession {
     pub db_session: DbSession,
+    pub ephemeral: bool,
 }
 
 impl ActiveSession {
     pub fn id(&self) -> i64 {
         self.db_session.id
     }
-    pub fn name(&self) -> &str {
-        &self.db_session.name
+    pub fn name(&self) -> Option<&str> {
+        if self.ephemeral {
+            None
+        } else {
+            Some(&self.db_session.name)
+        }
+    }
+    pub fn label(&self) -> &str {
+        if self.ephemeral {
+            "*"
+        } else {
+            &self.db_session.name
+        }
     }
 }
 

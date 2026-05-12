@@ -20,7 +20,7 @@ use crate::models::Registry;
 use crate::models::alias::{self, ResolvedModel};
 use crate::role::{self, Role};
 use crate::session::{ActiveSession, db::Database, messages_to_contents};
-use commands::{ActionArgs, DotCmd, parse as parse_cmd};
+use commands::{ActionArgs, DotCmd, SessionCmd, parse as parse_cmd};
 use prompt::PromptState;
 use render::Renderer;
 
@@ -124,7 +124,7 @@ impl ReplState {
     pub fn prompt(&self) -> String {
         PromptState {
             role: self.role.as_ref().map(|r| r.name.as_str()),
-            session: self.session.as_ref().map(|s| s.name()),
+            session: self.session.as_ref().map(|s| s.label()),
         }
         .render()
     }
@@ -195,7 +195,7 @@ fn print_banner(state: &ReplState) {
     let session = state
         .session
         .as_ref()
-        .map(|s| format!(", session: {}", s.name()))
+        .map(|s| format!(", session: {}", s.label()))
         .unwrap_or_default();
     eprintln!("genai-cli — model: {}{}", state.model.id, session);
     eprintln!("Type .help for commands, .exit or Ctrl-D to quit.");
@@ -252,7 +252,7 @@ async fn handle_command(state: &mut ReplState, cmd: DotCmd) -> Result<()> {
             }
             _ => eprintln!("(no input)"),
         },
-        DotCmd::Session(arg) => handle_session_cmd(state, arg).await?,
+        DotCmd::Session(cmd) => handle_session_cmd(state, cmd).await?,
         DotCmd::Role(arg) => handle_role_cmd(state, arg)?,
         DotCmd::Image(args) => handle_image_cmd(state, args).await?,
         DotCmd::Tts(args) => handle_tts_cmd(state, args).await?,
@@ -264,52 +264,97 @@ async fn handle_command(state: &mut ReplState, cmd: DotCmd) -> Result<()> {
     Ok(())
 }
 
-async fn handle_session_cmd(state: &mut ReplState, arg: Option<String>) -> Result<()> {
-    match arg.as_deref() {
-        None => {
+async fn handle_session_cmd(state: &mut ReplState, cmd: SessionCmd) -> Result<()> {
+    match cmd {
+        SessionCmd::Show => {
+            if let Some(s) = &state.session {
+                if s.ephemeral {
+                    eprintln!("session: <temporary> ({} message(s))", state.history.len());
+                } else {
+                    eprintln!("session: {} ({} message(s))", s.label(), state.history.len());
+                }
+            } else {
+                eprintln!("session: <none>");
+            }
+        }
+        SessionCmd::Start => start_ephemeral_session(state)?,
+        SessionCmd::Save { name } => save_current_session_as(state, &name)?,
+        SessionCmd::Switch { name } => switch_named_session(state, &name).await?,
+        SessionCmd::Rename { name } => rename_current_session(state, &name)?,
+        SessionCmd::List => {
+            let current = state.session.as_ref().and_then(|s| s.name());
             for s in state.db.list_sessions()? {
-                let current = state.session.as_ref().map(|s| s.name());
                 println!("{}", crate::session::format_summary(&s, current));
             }
         }
-        Some("-") => {
-            state.history.clear();
-            state.session = None;
-            eprintln!("(dropped session)");
-        }
-        Some("list") => {
-            for s in state.db.list_sessions()? {
-                let current = state.session.as_ref().map(|s| s.name());
-                println!("{}", crate::session::format_summary(&s, current));
+        SessionCmd::Drop => drop_current_session(state)?,
+        SessionCmd::Delete { name } => {
+            if state.db.delete_session(&name)? {
+                eprintln!("deleted session: {name}");
+            } else {
+                eprintln!("no session named {name}");
             }
         }
-        Some(name) => switch_session(state, name).await?,
+        SessionCmd::Export { name } => export_session_inline(state, &name)?,
     }
     Ok(())
 }
 
-async fn switch_session(state: &mut ReplState, name: &str) -> Result<()> {
-    let existed = state.db.get_session(name)?.is_some();
-    let inherit_candidate = !existed
-        && state.session.is_none()
-        && !state.history.is_empty();
-
+fn start_ephemeral_session(state: &mut ReplState) -> Result<()> {
+    if let Some(s) = &state.session {
+        if s.ephemeral {
+            eprintln!("(already in a temporary session)");
+            return Ok(());
+        }
+    }
+    let temp_name = format!("__tmp_repl_{}", std::process::id());
     let session = state
         .db
-        .get_or_create_session(name, Some(&state.model.id), state.system_prompt.as_deref())?;
-
-    if inherit_candidate {
+        .create_session(&temp_name, Some(&state.model.id), state.system_prompt.as_deref())?;
+    let active = ActiveSession {
+        db_session: session,
+        ephemeral: true,
+    };
+    if !state.history.is_empty() {
         let pair_count = state.history.len() / 2;
         if pair_count > 0
             && prompt_yes_no(
-                &format!("Include {} previous turn(s) in this session?", pair_count),
+                &format!("Include {} previous turn(s) in this temporary session?", pair_count),
                 true,
             )?
         {
-            inherit_history_into_session(&mut state.db, session.id, &state.history, &state.model.id)?;
+            inherit_history_into_session(&mut state.db, active.id(), &state.history, &state.model.id)?;
         }
     }
+    let msgs = state.db.load_messages(active.id())?;
+    state.history = messages_to_contents(&msgs);
+    state.session = Some(active);
+    eprintln!("temporary session started ({} message(s))", state.history.len());
+    Ok(())
+}
 
+fn save_current_session_as(state: &mut ReplState, name: &str) -> Result<()> {
+    let Some(session) = &mut state.session else {
+        anyhow::bail!("no active session to save");
+    };
+    if !session.ephemeral {
+        anyhow::bail!("current session is already named; use .session rename <name>");
+    }
+    if state.db.get_session(name)?.is_some() {
+        anyhow::bail!("session {name} already exists");
+    }
+    rename_session_row(&mut state.db, session.id(), name)?;
+    session.db_session.name = name.to_string();
+    session.ephemeral = false;
+    eprintln!("saved temporary session as: {name}");
+    Ok(())
+}
+
+async fn switch_named_session(state: &mut ReplState, name: &str) -> Result<()> {
+    maybe_resolve_ephemeral_before_transition(state)?;
+    let session = state
+        .db
+        .get_or_create_session(name, Some(&state.model.id), state.system_prompt.as_deref())?;
     let msgs = state.db.load_messages(session.id)?;
     state.history = messages_to_contents(&msgs);
     if let Some(model) = &session.model {
@@ -318,13 +363,82 @@ async fn switch_session(state: &mut ReplState, name: &str) -> Result<()> {
     if let Some(sp) = &session.system_prompt {
         state.system_prompt = Some(sp.clone());
     }
-    state.session = Some(ActiveSession { db_session: session });
+    state.session = Some(ActiveSession {
+        db_session: session,
+        ephemeral: false,
+    });
     eprintln!(
         "session: {} ({} message(s))",
-        state.session.as_ref().unwrap().name(),
+        state.session.as_ref().unwrap().label(),
         state.history.len()
     );
     Ok(())
+}
+
+fn rename_current_session(state: &mut ReplState, name: &str) -> Result<()> {
+    let Some(session) = &mut state.session else {
+        anyhow::bail!("no active session to rename");
+    };
+    if session.ephemeral {
+        anyhow::bail!("temporary session has no name; use .session save <name>");
+    }
+    if state.db.get_session(name)?.is_some() {
+        anyhow::bail!("session {name} already exists");
+    }
+    rename_session_row(&mut state.db, session.id(), name)?;
+    session.db_session.name = name.to_string();
+    eprintln!("renamed session to: {name}");
+    Ok(())
+}
+
+fn drop_current_session(state: &mut ReplState) -> Result<()> {
+    maybe_resolve_ephemeral_before_transition(state)?;
+    state.session = None;
+    state.history.clear();
+    eprintln!("(dropped session)");
+    Ok(())
+}
+
+fn export_session_inline(state: &mut ReplState, name: &str) -> Result<()> {
+    let s = state
+        .db
+        .get_session(name)?
+        .ok_or_else(|| anyhow!("no session named {name}"))?;
+    crate::session::export_jsonl(&state.db, &s, std::io::stdout().lock())
+}
+
+fn maybe_resolve_ephemeral_before_transition(state: &mut ReplState) -> Result<()> {
+    let Some(session) = &state.session else {
+        return Ok(());
+    };
+    if !session.ephemeral {
+        return Ok(());
+    }
+    if state.history.is_empty() {
+        let tmp = state.session.take().unwrap();
+        state.db.delete_session(tmp.label())?;
+        return Ok(());
+    }
+    loop {
+        eprint!("Temporary session has unsaved turns. [s]ave as / [d]iscard / [c]ancel? ");
+        let _ = std::io::stderr().flush();
+        let mut buf = String::new();
+        std::io::stdin().read_line(&mut buf)?;
+        match buf.trim().to_lowercase().as_str() {
+            "s" | "save" => {
+                let name = prompt_text("Session name")?;
+                save_current_session_as(state, &name)?;
+                return Ok(());
+            }
+            "d" | "discard" => {
+                let tmp = state.session.take().unwrap();
+                state.db.delete_session(tmp.label())?;
+                return Ok(());
+            }
+            "c" | "cancel" | "" => anyhow::bail!("cancelled"),
+            _ => eprintln!("Please answer s, d, or c."),
+        }
+    }
 }
 
 fn inherit_history_into_session(
@@ -333,9 +447,6 @@ fn inherit_history_into_session(
     history: &[Content],
     model_id: &str,
 ) -> Result<()> {
-    // Commit user+assistant pairs. Drop a trailing user message with no
-    // assistant counterpart — that case shouldn't normally occur, but if it
-    // does it isn't safe to persist as a completed turn.
     let mut i = 0;
     while i + 1 < history.len() {
         let u = &history[i];
@@ -345,6 +456,15 @@ fn inherit_history_into_session(
         }
         i += 2;
     }
+    Ok(())
+}
+
+fn rename_session_row(db: &mut Database, session_id: i64, name: &str) -> Result<()> {
+    use rusqlite::params;
+    db.conn.execute(
+        "UPDATE sessions SET name = ?1 WHERE id = ?2",
+        params![name, session_id],
+    )?;
     Ok(())
 }
 
@@ -361,6 +481,18 @@ fn prompt_yes_no(question: &str, default_yes: bool) -> Result<bool> {
         "y" | "yes" => true,
         _ => false,
     })
+}
+
+fn prompt_text(label: &str) -> Result<String> {
+    eprint!("{label}: ");
+    let _ = std::io::stderr().flush();
+    let mut buf = String::new();
+    std::io::stdin().read_line(&mut buf)?;
+    let out = buf.trim().to_string();
+    if out.is_empty() {
+        anyhow::bail!("name is required")
+    }
+    Ok(out)
 }
 
 fn handle_role_cmd(state: &mut ReplState, arg: Option<String>) -> Result<()> {
@@ -743,7 +875,7 @@ fn print_info(state: &ReplState) {
         eprintln!("role:         {}", r.name);
     }
     if let Some(s) = &state.session {
-        eprintln!("session:      {}", s.name());
+        eprintln!("session:      {}", s.label());
     }
     if let Some(t) = state.temperature.or(state.model.temperature) {
         eprintln!("temperature:  {t}");

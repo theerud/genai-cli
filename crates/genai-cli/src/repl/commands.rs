@@ -9,13 +9,26 @@ pub enum DotCmd {
     File(Vec<String>),
     Edit,
     Role(Option<String>),
-    Session(Option<String>),
+    Session(SessionCmd),
     Image(ActionArgs),
     Tts(ActionArgs),
     Music(ActionArgs),
     Undo,
     Retry,
     Unknown(String),
+}
+
+#[derive(Debug, Clone)]
+pub enum SessionCmd {
+    Show,
+    Start,
+    Save { name: String },
+    Switch { name: String },
+    Rename { name: String },
+    List,
+    Drop,
+    Delete { name: String },
+    Export { name: String },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -52,7 +65,10 @@ pub fn parse(line: &str) -> Option<DotCmd> {
         "file" => DotCmd::File(tail.iter().map(|s| s.to_string()).collect()),
         "edit" => DotCmd::Edit,
         "role" => DotCmd::Role(opt_first(&tail)),
-        "session" => DotCmd::Session(opt_first(&tail)),
+        "session" => match parse_session_cmd(&tail) {
+            Ok(s) => DotCmd::Session(s),
+            Err(e) => DotCmd::Unknown(format!(".session: {e}")),
+        },
         "undo" => DotCmd::Undo,
         "retry" => DotCmd::Retry,
         "image" => match parse_action_args(&tail) {
@@ -70,6 +86,34 @@ pub fn parse(line: &str) -> Option<DotCmd> {
         _ => DotCmd::Unknown(format!("unknown command: .{head}")),
     };
     Some(cmd)
+}
+
+fn parse_session_cmd(tail: &[&str]) -> Result<SessionCmd, String> {
+    match tail {
+        [] => Ok(SessionCmd::Show),
+        ["start"] => Ok(SessionCmd::Start),
+        ["save", name] => Ok(SessionCmd::Save {
+            name: (*name).to_string(),
+        }),
+        ["switch", name] => Ok(SessionCmd::Switch {
+            name: (*name).to_string(),
+        }),
+        ["rename", name] => Ok(SessionCmd::Rename {
+            name: (*name).to_string(),
+        }),
+        ["list"] => Ok(SessionCmd::List),
+        ["drop"] => Ok(SessionCmd::Drop),
+        ["delete", name] => Ok(SessionCmd::Delete {
+            name: (*name).to_string(),
+        }),
+        ["export", name] => Ok(SessionCmd::Export {
+            name: (*name).to_string(),
+        }),
+        _ => Err(
+            "expected one of: start, save <name>, switch <name>, rename <name>, list, drop, delete <name>, export <name>"
+                .to_string(),
+        ),
+    }
 }
 
 fn parse_action_args(tail: &[&str]) -> Result<ActionArgs, String> {
@@ -144,6 +188,35 @@ mod tests {
     }
 
     #[test]
+    fn session_subcommands_parse() {
+        assert!(matches!(parse(".session"), Some(DotCmd::Session(SessionCmd::Show))));
+        assert!(matches!(parse(".session start"), Some(DotCmd::Session(SessionCmd::Start))));
+        assert!(matches!(parse(".session save foo"), Some(DotCmd::Session(SessionCmd::Save { .. }))));
+        assert!(matches!(parse(".session switch foo"), Some(DotCmd::Session(SessionCmd::Switch { .. }))));
+        assert!(matches!(parse(".session rename foo"), Some(DotCmd::Session(SessionCmd::Rename { .. }))));
+        assert!(matches!(parse(".session list"), Some(DotCmd::Session(SessionCmd::List))));
+        assert!(matches!(parse(".session drop"), Some(DotCmd::Session(SessionCmd::Drop))));
+    }
+
+    #[test]
+    fn session_subcommand_errors() {
+        assert!(matches!(parse(".session foo"), Some(DotCmd::Unknown(_))));
+        assert!(matches!(parse(".session save"), Some(DotCmd::Unknown(_))));
+    }
+
+    #[test]
+    fn set_requires_value() {
+        match parse(".set temperature 0.7") {
+            Some(DotCmd::Set { key, value }) => {
+                assert_eq!(key, "temperature");
+                assert_eq!(value, "0.7");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert!(matches!(parse(".set foo"), Some(DotCmd::Unknown(_))));
+    }
+
+    #[test]
     fn image_parses_args_and_prompt() {
         match parse(".image -m imagen-4 -o out.png a cat on the moon") {
             Some(DotCmd::Image(a)) => {
@@ -163,15 +236,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn set_requires_value() {
-        match parse(".set temperature 0.7") {
-            Some(DotCmd::Set { key, value }) => {
-                assert_eq!(key, "temperature");
-                assert_eq!(value, "0.7");
-            }
-            other => panic!("unexpected: {other:?}"),
-        }
-        assert!(matches!(parse(".set foo"), Some(DotCmd::Unknown(_))));
-    }
 }

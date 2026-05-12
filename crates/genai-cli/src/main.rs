@@ -20,7 +20,7 @@ use gemini::image::{self as image_api, ImageRequest, InputImage};
 use gemini::tts::{AudioOut, MusicRequest, TtsRequest, pcm16_to_wav};
 use gemini::types::{Content, GenerationConfig, Part};
 use models::alias::{self, ResolvedModel};
-use repl::render::{self, Renderer};
+use repl::render::{self};
 use session::{ActiveSession, messages_to_contents, open_db};
 use std::path::PathBuf;
 
@@ -284,7 +284,13 @@ async fn run_repl(
         let s = db.get_or_create_session(name, Some(chat_model_for_session), None)?;
         let msgs = db.load_messages(s.id)?;
         let history = messages_to_contents(&msgs);
-        (Some(ActiveSession { db_session: s }), history)
+        (
+            Some(ActiveSession {
+                db_session: s,
+                ephemeral: false,
+            }),
+            history,
+        )
     } else {
         (None, Vec::new())
     };
@@ -324,7 +330,10 @@ async fn run_one_shot_chat(
             .unwrap_or_else(|| cfg.default_chat_model());
         let s = db.get_or_create_session(name, Some(chat_model), None)?;
         session_history = messages_to_contents(&db.load_messages(s.id)?);
-        active = Some(ActiveSession { db_session: s });
+        active = Some(ActiveSession {
+            db_session: s,
+            ephemeral: false,
+        });
     }
 
     let requested = cli

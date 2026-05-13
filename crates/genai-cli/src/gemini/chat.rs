@@ -179,30 +179,36 @@ fn parse_sse_data(data: &str) -> Result<Vec<ChatEvent>> {
 }
 
 /// Parse an SSE byte stream into individual `data:` payloads (one per event).
+///
+/// Accumulates raw bytes rather than `String`s: HTTP chunks can split a
+/// multi-byte UTF-8 codepoint, and an earlier version that did
+/// `from_utf8_lossy` per chunk would insert U+FFFD at the boundary.
+/// Event terminators (`\n\n` / `\r\n\r\n`) are pure ASCII, so we can search
+/// for them in the byte buffer and only decode complete events to UTF-8.
 fn sse_events<S>(stream: S) -> impl Stream<Item = Result<String>>
 where
     S: Stream<Item = std::result::Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
 {
     async_stream::stream! {
-        let mut buf = String::new();
+        let mut buf: Vec<u8> = Vec::new();
         let mut stream = Box::pin(stream);
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| anyhow!("http stream: {e}"))?;
-            buf.push_str(&String::from_utf8_lossy(&chunk));
-            while let Some(idx) = find_event_terminator(&buf) {
-                let (event, rest) = buf.split_at(idx.end);
-                let data = extract_data(&event[..idx.start]);
-                let rest = rest.to_string();
-                buf = rest;
-                if let Some(d) = data {
+            buf.extend_from_slice(&chunk);
+            while let Some(idx) = find_event_terminator_bytes(&buf) {
+                let event_bytes = buf.drain(..idx.end).collect::<Vec<u8>>();
+                let event_str = String::from_utf8_lossy(&event_bytes[..idx.start]);
+                if let Some(d) = extract_data(&event_str) {
                     yield Ok(d);
                 }
             }
         }
-        if !buf.is_empty()
-            && let Some(d) = extract_data(&buf) {
+        if !buf.is_empty() {
+            let tail = String::from_utf8_lossy(&buf);
+            if let Some(d) = extract_data(&tail) {
                 yield Ok(d);
             }
+        }
     }
 }
 
@@ -211,20 +217,24 @@ struct EventBounds {
     end: usize,
 }
 
-fn find_event_terminator(s: &str) -> Option<EventBounds> {
-    if let Some(pos) = s.find("\n\n") {
+fn find_event_terminator_bytes(buf: &[u8]) -> Option<EventBounds> {
+    if let Some(pos) = find_subslice(buf, b"\n\n") {
         return Some(EventBounds {
             start: pos,
             end: pos + 2,
         });
     }
-    if let Some(pos) = s.find("\r\n\r\n") {
+    if let Some(pos) = find_subslice(buf, b"\r\n\r\n") {
         return Some(EventBounds {
             start: pos,
             end: pos + 4,
         });
     }
     None
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 fn extract_data(event: &str) -> Option<String> {
@@ -270,5 +280,21 @@ mod tests {
     fn returns_none_without_data() {
         let ev = "event: keepalive\n";
         assert_eq!(extract_data(ev), None);
+    }
+
+    #[tokio::test]
+    async fn sse_handles_utf8_split_across_chunks() {
+        // The euro sign is three bytes (0xE2 0x82 0xAC). Split it across two
+        // chunks so the old per-chunk lossy decoder would insert U+FFFD.
+        let body = "data: cost is €\n\n";
+        let split = body.find('€').unwrap() + 1; // mid-codepoint
+        let first = bytes::Bytes::copy_from_slice(&body.as_bytes()[..split]);
+        let second = bytes::Bytes::copy_from_slice(&body.as_bytes()[split..]);
+        let chunks: Vec<std::result::Result<bytes::Bytes, reqwest::Error>> =
+            vec![Ok(first), Ok(second)];
+        let stream = futures_util::stream::iter(chunks);
+        let mut events = Box::pin(sse_events(stream));
+        let ev = events.next().await.unwrap().unwrap();
+        assert_eq!(ev, "cost is €");
     }
 }

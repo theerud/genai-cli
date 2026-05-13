@@ -1,10 +1,11 @@
 pub mod alias;
+pub mod sync;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const BUNDLED: &str = include_str!("data.toml");
+pub(crate) const BUNDLED: &str = include_str!("data.toml");
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Registry {
@@ -61,11 +62,10 @@ impl Registry {
         let mut reg: Registry = toml::from_str(BUNDLED).context("parsing bundled models data")?;
         let bundled_count = reg.models.len();
 
-        if let Ok(paths) = crate::config::paths() {
-            let overlay = paths.config_dir.join("models.toml");
-            if overlay.exists() {
-                merge_overlay(&mut reg, &overlay)?;
-            }
+        if let Ok(paths) = crate::config::paths()
+            && let Some(path) = overlay_path(&paths)
+        {
+            merge_overlay(&mut reg, &path)?;
         }
         tracing::debug!(
             bundled = bundled_count,
@@ -102,6 +102,14 @@ impl Registry {
             .map(|(_, id)| id.to_string())
             .collect()
     }
+}
+
+/// Path to the synced overlay file, when it exists. Synced output lives in
+/// `<data_dir>/models.toml` and is fully managed by `genai models sync` —
+/// hand-edits get clobbered on the next sync.
+pub fn overlay_path(paths: &crate::config::Paths) -> Option<std::path::PathBuf> {
+    let p = paths.data_dir.join("models.toml");
+    if p.exists() { Some(p) } else { None }
 }
 
 fn merge_overlay(reg: &mut Registry, path: &Path) -> Result<()> {

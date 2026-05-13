@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/genai-cli", "crates/genai-models-gen"]
+members = ["crates/genai-cli"]
 
 [workspace.package]
 edition = "2024"

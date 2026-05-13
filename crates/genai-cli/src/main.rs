@@ -44,6 +44,10 @@ async fn real_main() -> Result<()> {
         return match cmd {
             Command::Models { sub } => match sub {
                 ModelsCmd::List => cmd_models_list(),
+                ModelsCmd::Sync { dry_run } => {
+                    models::sync::run(&cfg, models::sync::SyncOptions { dry_run: *dry_run })
+                        .await
+                }
             },
             Command::Sessions { sub } => match sub {
                 SessionsCmd::List => cmd_sessions_list(),

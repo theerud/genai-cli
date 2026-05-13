@@ -140,6 +140,7 @@ Ctrl-C during a streaming response cancels cleanly without polluting session his
 | `genai sessions export <name> [-o PATH]` | export session as JSONL (stdout if `-o -` or omitted) |
 | `genai gc` | remove attachment blobs no longer referenced by any message |
 | `genai init [--force]` | first-run wizard to write `config.toml` |
+| `genai models sync [--dry-run]` | refresh the synced models overlay from the live API |
 
 ## Config
 
@@ -274,14 +275,18 @@ Everything except attachments lives in a single SQLite DB:
 
 ## Models registry
 
-The CLI ships with a curated list of known Gemini models in `crates/genai-cli/src/models/data.toml`. Override or extend locally by dropping entries into `~/.config/genai/models.toml` (same schema, merged on top of the bundled list).
+The CLI ships with a curated list of known Gemini models in `crates/genai-cli/src/models/data.toml` (bundled into the binary at compile time). Pricing, capability labels, and thinking levels live there — those fields are curated by hand because the API does not return them.
 
-To inspect drift between the curated list and the live API:
+To pick up new preview models without rebuilding:
 
 ```bash
-GEMINI_API_KEY=... cargo run -p genai-models-gen
-# Reports new / missing / changed entries to stderr. Does not write to data.toml.
+genai models sync               # writes <data_dir>/models.toml
+genai models sync --dry-run     # just print the diff
 ```
+
+`models sync` fetches `models.list` from the Gemini API and overlays anything the bundled list doesn't already know about. Capabilities for new entries are guessed from the model id; for entries you care about long-term, copy the row into the bundled `data.toml` with proper pricing/capability labels.
+
+For custom model ids the API doesn't know about, define an alias — aliases pass any model id through to the API (unknown ids surface a warning, never a hard block).
 
 ## Known limitations
 
@@ -297,8 +302,7 @@ GEMINI_API_KEY=... cargo run -p genai-models-gen
 ```
 genai-cli/
 ├── crates/
-│   ├── genai-cli/          # main binary `genai`
-│   └── genai-models-gen/   # dev tool, not shipped
+│   └── genai-cli/          # main binary `genai`
 ├── DESIGN.md               # design rationale
 └── README.md               # this file
 ```

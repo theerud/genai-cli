@@ -52,8 +52,14 @@ pub enum Command {
 
 #[derive(Debug, Subcommand)]
 pub enum ModelsCmd {
-    /// List bundled and user-overlay models
+    /// List bundled and synced-overlay models
     List,
+    /// Refresh the synced models overlay from the Gemini API
+    Sync {
+        /// Print the diff but don't write the overlay
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

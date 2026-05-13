@@ -30,11 +30,11 @@ Resolution order: process env (default `GEMINI_API_KEY`, name overridable via `a
   tools/
     <name>.toml         # user-defined function tools
     bin/                # scripts reachable from user tools (prepended to PATH)
-  models.toml           # optional user overlay over bundled registry
 
 ~/.local/share/genai/
   data.db               # single SQLite DB (sessions, messages, attachments index)
   attachments/<hash>.*  # content-addressed blobs
+  models.toml           # synced overlay over the bundled registry (managed by `genai models sync`)
 
 ~/.cache/genai/         # regenerable: rustyline history, etc.
 ```
@@ -130,9 +130,9 @@ CLI flag > active role > session meta > user config > built-in default.
 
 ## Models registry
 
-Bundled `models.toml` (embedded with `include_str!`) holds the curated list: id, capabilities, context window, pricing, thinking levels, status. User overlay in `~/.config/genai/models.toml` merges on top.
+Bundled `data.toml` (embedded with `include_str!`) holds the curated list: id, capabilities, context window, pricing, thinking levels, status. `genai models sync` refreshes a synced overlay at `<data_dir>/models.toml` from the live `models.list` API, covering entries the bundled list does not yet know about (preview models, new family releases). Bundled entries stay canonical because they carry curated fields the API does not return (pricing, capability labels, thinking levels).
 
-Dev tool `genai-models-gen` (workspace member, not in release binary) diffs `models.list` API against bundled registry and reports new/changed/deprecated models to stderr for manual curation. No auto-writes.
+The synced overlay is fully managed by the sync command — hand-edits get clobbered on the next run. To add a custom model id the API does not know about, define an alias instead; aliases pass any model id through to the API (unknown ids get a warning, never a hard block).
 
 ## REPL
 
@@ -201,21 +201,20 @@ Cargo workspace:
 
 ```
 crates/
-├── genai-cli/            # main binary (name: `genai`)
-│   └── src/
-│       ├── main.rs       # top-level entry, error formatter, tracing init
-│       ├── cli.rs        # clap definitions
-│       ├── config.rs     # config loading, paths(), GENAI_HOME override
-│       ├── init.rs       # `genai init` first-run wizard
-│       ├── output.rs     # shared write_audio / write_images / expand_path
-│       ├── role.rs
-│       ├── ui.rs         # confirm / read_line / read_required / read_secret
-│       ├── gemini/       # API client: chat, image, tts, types
-│       ├── session/      # session, db, attachment
-│       ├── repl/         # chat, commands, complete, dispatch, media, prompt, render, sessions
-│       ├── models/       # registry + alias resolution (data.toml bundled)
-│       └── tools/        # builtin, cli_ui, local, process, runner, user
-└── genai-models-gen/     # dev-only tool, not in release binary
+└── genai-cli/            # main binary (name: `genai`)
+    └── src/
+        ├── main.rs       # top-level entry, error formatter, tracing init
+        ├── cli.rs        # clap definitions
+        ├── config.rs     # config loading, paths(), GENAI_HOME override
+        ├── init.rs       # `genai init` first-run wizard
+        ├── output.rs     # shared write_audio / write_images / expand_path
+        ├── role.rs
+        ├── ui.rs         # confirm / read_line / read_required / read_secret
+        ├── gemini/       # API client: chat, image, tts, types
+        ├── session/      # session, db, attachment
+        ├── repl/         # chat, commands, complete, dispatch, media, prompt, render, sessions
+        ├── models/       # registry + alias resolution + sync (data.toml bundled)
+        └── tools/        # builtin, cli_ui, local, process, runner, user
 ```
 
 ## Dependencies

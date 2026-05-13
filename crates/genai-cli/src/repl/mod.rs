@@ -1,11 +1,13 @@
 pub mod commands;
+pub mod complete;
 pub mod prompt;
 pub mod render;
 
 use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
-use rustyline::DefaultEditor;
+use rustyline::Editor;
 use rustyline::error::ReadlineError;
+use rustyline::history::DefaultHistory;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use tokio::signal;
@@ -157,13 +159,15 @@ impl ReplState {
 }
 
 pub async fn run(mut state: ReplState) -> Result<()> {
-    let mut rl = DefaultEditor::new()?;
+    let mut rl: Editor<complete::ReplHelper, DefaultHistory> = Editor::new()?;
+    rl.set_helper(Some(complete::ReplHelper::new()));
     let history_path = history_file_path()?;
     let _ = rl.load_history(&history_path);
 
     print_banner(&state);
 
     loop {
+        refresh_completer(&mut rl, &state);
         let prompt_str = state.prompt();
         let line = tokio::task::block_in_place(|| rl.readline(&prompt_str));
         match line {
@@ -218,6 +222,36 @@ fn history_file_path() -> Result<PathBuf> {
     std::fs::create_dir_all(&paths.cache_dir)
         .with_context(|| format!("creating {}", paths.cache_dir.display()))?;
     Ok(paths.cache_dir.join("history"))
+}
+
+/// Refresh the completer's snapshots from current REPL state. Cheap enough
+/// to run before each readline.
+fn refresh_completer(rl: &mut Editor<complete::ReplHelper, DefaultHistory>, state: &ReplState) {
+    let Some(helper) = rl.helper_mut() else {
+        return;
+    };
+    helper.role_names = role::list_available().unwrap_or_default();
+    helper.session_labels = state
+        .db
+        .list_sessions()
+        .unwrap_or_default()
+        .into_iter()
+        .flat_map(|s| [s.name, format!("#{}", s.id)])
+        .collect();
+    helper.model_names = state
+        .registry
+        .models
+        .iter()
+        .filter(|m| m.has(crate::models::CAP_CHAT))
+        .map(|m| m.id.clone())
+        .chain(state.cfg.aliases.keys().cloned())
+        .collect();
+    let mut tools: Vec<String> = tools::builtin_names()
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    tools.extend(tools::local_names().iter().map(|s| s.to_string()));
+    helper.tool_names = tools;
 }
 
 async fn handle_command(state: &mut ReplState, cmd: DotCmd) -> Result<()> {

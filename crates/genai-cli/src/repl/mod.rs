@@ -315,7 +315,7 @@ async fn handle_session_cmd(state: &mut ReplState, cmd: SessionCmd) -> Result<()
     match cmd {
         SessionCmd::Show => {
             if let Some(s) = &state.session {
-                if s.ephemeral {
+                if s.ephemeral() {
                     eprintln!("session: <temporary> ({} message(s))", state.history.len());
                 } else {
                     eprintln!("session: {} ({} message(s))", s.label(), state.history.len());
@@ -351,7 +351,7 @@ fn maybe_prompt_save_on_exit(state: &mut ReplState) -> Result<bool> {
     let Some(session) = &state.session else {
         return Ok(false);
     };
-    if !session.ephemeral || state.history.is_empty() {
+    if !session.ephemeral() || state.history.is_empty() {
         return Ok(false);
     }
     loop {
@@ -374,18 +374,15 @@ fn maybe_prompt_save_on_exit(state: &mut ReplState) -> Result<bool> {
 
 fn start_ephemeral_session(state: &mut ReplState) -> Result<()> {
     if let Some(s) = &state.session
-        && s.ephemeral {
-            eprintln!("(already in a temporary session)");
-            return Ok(());
-        }
-    let temp_name = format!("__tmp_repl_{}", std::process::id());
+        && s.ephemeral()
+    {
+        eprintln!("(already in a temporary session)");
+        return Ok(());
+    }
     let session = state
         .db
-        .create_session(&temp_name, Some(&state.model.id), state.system_prompt.as_deref())?;
-    let active = ActiveSession {
-        db_session: session,
-        ephemeral: true,
-    };
+        .create_ephemeral_session(Some(&state.model.id), state.system_prompt.as_deref())?;
+    let active = ActiveSession { db_session: session };
     if !state.history.is_empty() {
         let pair_count = state.history.len() / 2;
         if pair_count > 0
@@ -408,15 +405,15 @@ fn save_current_session_as(state: &mut ReplState, name: &str) -> Result<()> {
     let Some(session) = &mut state.session else {
         anyhow::bail!("no active session to save");
     };
-    if !session.ephemeral {
+    if !session.ephemeral() {
         anyhow::bail!("current session is already named; use .session rename <name>");
     }
     if state.db.get_session(name)?.is_some() {
         anyhow::bail!("session {name} already exists");
     }
-    rename_session_row(&mut state.db, session.id(), name)?;
+    state.db.promote_to_named(session.id(), name)?;
     session.db_session.name = name.to_string();
-    session.ephemeral = false;
+    session.db_session.ephemeral = false;
     eprintln!("saved temporary session as: {name}");
     Ok(())
 }
@@ -434,10 +431,7 @@ async fn switch_named_session(state: &mut ReplState, name: &str) -> Result<()> {
     if let Some(sp) = &session.system_prompt {
         state.system_prompt = Some(sp.clone());
     }
-    state.session = Some(ActiveSession {
-        db_session: session,
-        ephemeral: false,
-    });
+    state.session = Some(ActiveSession { db_session: session });
     eprintln!(
         "session: {} ({} message(s))",
         state.session.as_ref().unwrap().label(),
@@ -450,13 +444,13 @@ fn rename_current_session(state: &mut ReplState, name: &str) -> Result<()> {
     let Some(session) = &mut state.session else {
         anyhow::bail!("no active session to rename");
     };
-    if session.ephemeral {
+    if session.ephemeral() {
         anyhow::bail!("temporary session has no name; use .session save <name>");
     }
     if state.db.get_session(name)?.is_some() {
         anyhow::bail!("session {name} already exists");
     }
-    rename_session_row(&mut state.db, session.id(), name)?;
+    state.db.rename_session(session.id(), name)?;
     session.db_session.name = name.to_string();
     eprintln!("renamed session to: {name}");
     Ok(())
@@ -482,7 +476,7 @@ fn maybe_resolve_ephemeral_before_transition(state: &mut ReplState) -> Result<()
     let Some(session) = &state.session else {
         return Ok(());
     };
-    if !session.ephemeral {
+    if !session.ephemeral() {
         return Ok(());
     }
     if state.history.is_empty() {
@@ -527,15 +521,6 @@ fn inherit_history_into_session(
         }
         i += 2;
     }
-    Ok(())
-}
-
-fn rename_session_row(db: &mut Database, session_id: i64, name: &str) -> Result<()> {
-    use rusqlite::params;
-    db.conn.execute(
-        "UPDATE sessions SET name = ?1 WHERE id = ?2",
-        params![name, session_id],
-    )?;
     Ok(())
 }
 

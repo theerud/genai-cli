@@ -281,13 +281,7 @@ async fn run_repl(
         let s = db.get_or_create_session(name, Some(chat_model_for_session), None)?;
         let msgs = db.load_messages(s.id)?;
         let history = messages_to_contents(&msgs);
-        (
-            Some(ActiveSession {
-                db_session: s,
-                ephemeral: false,
-            }),
-            history,
-        )
+        (Some(ActiveSession { db_session: s }), history)
     } else {
         (None, Vec::new())
     };
@@ -327,10 +321,7 @@ async fn run_one_shot_chat(
             .unwrap_or_else(|| cfg.default_chat_model());
         let s = db.get_or_create_session(name, Some(chat_model), None)?;
         session_history = messages_to_contents(&db.load_messages(s.id)?);
-        active = Some(ActiveSession {
-            db_session: s,
-            ephemeral: false,
-        });
+        active = Some(ActiveSession { db_session: s });
     }
 
     let requested = cli

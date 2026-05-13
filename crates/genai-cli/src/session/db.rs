@@ -14,6 +14,7 @@ pub struct Session {
     pub name: String,
     pub model: Option<String>,
     pub system_prompt: Option<String>,
+    pub ephemeral: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     system_prompt TEXT,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
+    ephemeral     INTEGER NOT NULL DEFAULT 0,
     meta          TEXT NOT NULL DEFAULT '{}'
 );
 
@@ -72,7 +74,7 @@ CREATE TABLE IF NOT EXISTS message_attachments (
 );
 "#;
 
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 impl Database {
     pub fn open(path: &Path) -> Result<Self> {
@@ -92,6 +94,9 @@ impl Database {
             if version < 2 {
                 migrate_v1_to_v2(&conn)?;
             }
+            if version < 3 {
+                migrate_v2_to_v3(&conn)?;
+            }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -101,7 +106,7 @@ impl Database {
         let row = self
             .conn
             .query_row(
-                "SELECT id, name, model, system_prompt FROM sessions WHERE name = ?1",
+                "SELECT id, name, model, system_prompt, ephemeral FROM sessions WHERE name = ?1",
                 params![name],
                 |r| {
                     Ok(Session {
@@ -109,6 +114,7 @@ impl Database {
                         name: r.get(1)?,
                         model: r.get(2)?,
                         system_prompt: r.get(3)?,
+                        ephemeral: r.get::<_, i64>(4)? != 0,
                     })
                 },
             )
@@ -120,7 +126,7 @@ impl Database {
         let row = self
             .conn
             .query_row(
-                "SELECT id, name, model, system_prompt FROM sessions WHERE id = ?1",
+                "SELECT id, name, model, system_prompt, ephemeral FROM sessions WHERE id = ?1",
                 params![id],
                 |r| {
                     Ok(Session {
@@ -128,6 +134,7 @@ impl Database {
                         name: r.get(1)?,
                         model: r.get(2)?,
                         system_prompt: r.get(3)?,
+                        ephemeral: r.get::<_, i64>(4)? != 0,
                     })
                 },
             )
@@ -150,11 +157,37 @@ impl Database {
         model: Option<&str>,
         system_prompt: Option<&str>,
     ) -> Result<Session> {
+        self.create_session_inner(name, model, system_prompt, false)
+    }
+
+    /// Create a session with a generated unique placeholder name and the
+    /// `ephemeral` flag set. The caller flips the flag (and renames) via
+    /// `promote_to_named` if the user decides to keep it.
+    pub fn create_ephemeral_session(
+        &mut self,
+        model: Option<&str>,
+        system_prompt: Option<&str>,
+    ) -> Result<Session> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let name = format!("__ephemeral_{nanos:032}");
+        self.create_session_inner(&name, model, system_prompt, true)
+    }
+
+    fn create_session_inner(
+        &mut self,
+        name: &str,
+        model: Option<&str>,
+        system_prompt: Option<&str>,
+        ephemeral: bool,
+    ) -> Result<Session> {
         let now = now_iso();
         self.conn.execute(
-            "INSERT INTO sessions (name, model, system_prompt, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?4)",
-            params![name, model, system_prompt, now],
+            "INSERT INTO sessions (name, model, system_prompt, created_at, updated_at, ephemeral) \
+             VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
+            params![name, model, system_prompt, now, ephemeral as i64],
         )?;
         let id = self.conn.last_insert_rowid();
         Ok(Session {
@@ -162,7 +195,27 @@ impl Database {
             name: name.to_string(),
             model: model.map(String::from),
             system_prompt: system_prompt.map(String::from),
+            ephemeral,
         })
+    }
+
+    /// Rename a session and clear its ephemeral flag. Used when the user
+    /// saves a temporary session under a real name.
+    pub fn promote_to_named(&mut self, session_id: i64, name: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET name = ?1, ephemeral = 0 WHERE id = ?2",
+            params![name, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Rename a session without changing its ephemeral status.
+    pub fn rename_session(&mut self, session_id: i64, name: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET name = ?1 WHERE id = ?2",
+            params![name, session_id],
+        )?;
+        Ok(())
     }
 
     pub fn get_or_create_session(
@@ -181,6 +234,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT s.id, s.name, s.model, COUNT(m.id) \
              FROM sessions s LEFT JOIN messages m ON m.session_id = s.id \
+             WHERE s.ephemeral = 0 \
              GROUP BY s.id ORDER BY s.updated_at DESC",
         )?;
         let rows = stmt
@@ -339,6 +393,23 @@ impl Database {
         tx.commit()?;
         Ok(removed)
     }
+}
+
+fn migrate_v2_to_v3(conn: &Connection) -> Result<()> {
+    let has_col: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name = 'ephemeral'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_col == 0 {
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN ephemeral INTEGER NOT NULL DEFAULT 0;")?;
+    }
+    // Mark any legacy PID-named temp sessions ephemeral so they stop showing
+    // up in listings. The user can delete them manually if desired.
+    conn.execute_batch(
+        "UPDATE sessions SET ephemeral = 1 WHERE ephemeral = 0 AND name LIKE '__tmp_repl_%';",
+    )?;
+    Ok(())
 }
 
 fn migrate_v1_to_v2(conn: &Connection) -> Result<()> {
@@ -530,6 +601,33 @@ mod tests {
         assert_eq!(db.list_sessions().unwrap().len(), 2);
         assert!(db.delete_session_ref("a").unwrap());
         assert_eq!(db.list_sessions().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn ephemeral_sessions_excluded_from_list() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let mut db = Database::open(&path).unwrap();
+        db.create_session("real", None, None).unwrap();
+        let tmp = db.create_ephemeral_session(None, None).unwrap();
+        assert!(tmp.ephemeral);
+        let names: Vec<_> = db
+            .list_sessions()
+            .unwrap()
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(names, vec!["real".to_string()]);
+        // Promote and confirm it shows up.
+        db.promote_to_named(tmp.id, "promoted").unwrap();
+        let mut names: Vec<_> = db
+            .list_sessions()
+            .unwrap()
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["promoted".to_string(), "real".to_string()]);
     }
 
     #[test]

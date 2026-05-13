@@ -13,7 +13,6 @@ use db::{Database, MessageRecord, Session as DbSession, SessionSummary};
 
 pub struct ActiveSession {
     pub db_session: DbSession,
-    pub ephemeral: bool,
 }
 
 impl ActiveSession {
@@ -21,18 +20,21 @@ impl ActiveSession {
         self.db_session.id
     }
     pub fn name(&self) -> Option<&str> {
-        if self.ephemeral {
+        if self.db_session.ephemeral {
             None
         } else {
             Some(&self.db_session.name)
         }
     }
     pub fn label(&self) -> &str {
-        if self.ephemeral {
+        if self.db_session.ephemeral {
             "*"
         } else {
             &self.db_session.name
         }
+    }
+    pub fn ephemeral(&self) -> bool {
+        self.db_session.ephemeral
     }
 }
 

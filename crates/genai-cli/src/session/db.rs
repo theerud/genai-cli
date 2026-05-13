@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS messages (
     id          INTEGER PRIMARY KEY,
     session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     seq         INTEGER NOT NULL,
+    turn_id     INTEGER NOT NULL DEFAULT 0,
     role        TEXT NOT NULL,
     parts       TEXT NOT NULL,
     token_count INTEGER,
@@ -55,6 +56,7 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq);
+CREATE INDEX IF NOT EXISTS idx_messages_turn    ON messages(session_id, turn_id);
 
 CREATE TABLE IF NOT EXISTS attachments (
     hash       TEXT PRIMARY KEY,
@@ -70,7 +72,7 @@ CREATE TABLE IF NOT EXISTS message_attachments (
 );
 "#;
 
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 impl Database {
     pub fn open(path: &Path) -> Result<Self> {
@@ -87,6 +89,9 @@ impl Database {
         let version: i32 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
         if version < SCHEMA_VERSION {
             conn.execute_batch(SCHEMA)?;
+            if version < 2 {
+                migrate_v1_to_v2(&conn)?;
+            }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -252,7 +257,7 @@ impl Database {
 
     /// Like `commit_turn`, but the assistant side may be a chain of multiple
     /// model and tool-response messages produced by a function-calling loop.
-    /// All messages are persisted in one transaction.
+    /// All messages share one `turn_id` and are persisted in one transaction.
     pub fn commit_exchange(
         &mut self,
         session_id: i64,
@@ -263,9 +268,10 @@ impl Database {
     ) -> Result<()> {
         let tx = self.conn.transaction()?;
         let next_seq = next_seq(&tx, session_id)?;
+        let next_turn = next_turn_id(&tx, session_id)?;
         let now = now_iso();
 
-        let user_id = insert_message(&tx, session_id, next_seq, user, &now)?;
+        let user_id = insert_message(&tx, session_id, next_seq, next_turn, user, &now)?;
         for hash in attachment_hashes {
             tx.execute(
                 "INSERT OR IGNORE INTO message_attachments (message_id, attachment_hash) VALUES (?1, ?2)",
@@ -273,7 +279,7 @@ impl Database {
             )?;
         }
         for (i, msg) in chain.iter().enumerate() {
-            insert_message(&tx, session_id, next_seq + 1 + i as i64, msg, &now)?;
+            insert_message(&tx, session_id, next_seq + 1 + i as i64, next_turn, msg, &now)?;
         }
         tx.execute(
             "UPDATE sessions SET updated_at = ?1, model = COALESCE(?2, model) WHERE id = ?3",
@@ -310,31 +316,50 @@ impl Database {
         Ok(())
     }
 
-    /// Drop the last completed turn (the highest-seq assistant message plus the
-    /// preceding user message) from a session. Returns true if anything was dropped.
-    pub fn pop_last_turn(&mut self, session_id: i64) -> Result<bool> {
+    /// Drop the last completed turn — all messages sharing the highest
+    /// `turn_id` for this session. Works for plain chat (2 rows) and for
+    /// function-calling exchanges (more). Returns the number of rows removed.
+    pub fn pop_last_turn(&mut self, session_id: i64) -> Result<usize> {
         let tx = self.conn.transaction()?;
-        let last_seq: Option<i64> = tx
+        let last_turn: Option<i64> = tx
             .query_row(
-                "SELECT MAX(seq) FROM messages WHERE session_id = ?1",
+                "SELECT MAX(turn_id) FROM messages WHERE session_id = ?1",
                 params![session_id],
                 |r| r.get(0),
             )
             .optional()?
             .flatten();
-        let Some(seq) = last_seq else {
-            return Ok(false);
+        let Some(turn) = last_turn else {
+            return Ok(0);
         };
-        // Drop last assistant + preceding user. If history is odd (shouldn't be),
-        // dropping the last message alone is still better than nothing.
-        let lo = (seq - 1).max(1);
-        tx.execute(
-            "DELETE FROM messages WHERE session_id = ?1 AND seq >= ?2",
-            params![session_id, lo],
+        let removed = tx.execute(
+            "DELETE FROM messages WHERE session_id = ?1 AND turn_id = ?2",
+            params![session_id, turn],
         )?;
         tx.commit()?;
-        Ok(true)
+        Ok(removed)
     }
+}
+
+fn migrate_v1_to_v2(conn: &Connection) -> Result<()> {
+    // v1 had no turn_id column; the migration was just the ALTER TABLE,
+    // which CREATE TABLE IF NOT EXISTS won't apply to an existing table.
+    let has_col: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = 'turn_id'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_col == 0 {
+        conn.execute_batch("ALTER TABLE messages ADD COLUMN turn_id INTEGER NOT NULL DEFAULT 0;")?;
+    }
+    // Backfill turn_id assuming the legacy 2-message-per-turn invariant.
+    // Tool exchanges committed under v1 will be split apart by this — not
+    // ideal, but `.undo` on those was already broken under the old code.
+    conn.execute_batch(
+        "UPDATE messages SET turn_id = (seq + 1) / 2 WHERE turn_id = 0;\
+         CREATE INDEX IF NOT EXISTS idx_messages_turn ON messages(session_id, turn_id);",
+    )?;
+    Ok(())
 }
 
 fn next_seq(tx: &Transaction, session_id: i64) -> Result<i64> {
@@ -349,19 +374,32 @@ fn next_seq(tx: &Transaction, session_id: i64) -> Result<i64> {
     Ok(v.map(|s| s + 1).unwrap_or(1))
 }
 
+fn next_turn_id(tx: &Transaction, session_id: i64) -> Result<i64> {
+    let v: Option<i64> = tx
+        .query_row(
+            "SELECT MAX(turn_id) FROM messages WHERE session_id = ?1",
+            params![session_id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(v.map(|s| s + 1).unwrap_or(1))
+}
+
 fn insert_message(
     tx: &Transaction,
     session_id: i64,
     seq: i64,
+    turn_id: i64,
     msg: &Content,
     now: &str,
 ) -> Result<i64> {
     let role = msg.role.as_deref().unwrap_or("user");
     let parts_json = serde_json::to_string(&msg.parts)?;
     tx.execute(
-        "INSERT INTO messages (session_id, seq, role, parts, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![session_id, seq, role, parts_json, now],
+        "INSERT INTO messages (session_id, seq, turn_id, role, parts, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![session_id, seq, turn_id, role, parts_json, now],
     )?;
     Ok(tx.last_insert_rowid())
 }
@@ -433,6 +471,53 @@ mod tests {
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].role, "user");
         assert_eq!(msgs[1].role, "model");
+    }
+
+    #[test]
+    fn pop_last_turn_handles_tool_exchange() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let mut db = Database::open(&path).unwrap();
+        let s = db.create_session("t", None, None).unwrap();
+
+        // Plain turn: 2 rows.
+        db.commit_turn(s.id, &user("hi"), &assistant("hello"), None, &[])
+            .unwrap();
+        // Tool exchange: user + 3 chain rows (model fn-call, tool response, model text).
+        let model_call = Content {
+            role: Some("model".into()),
+            parts: vec![Part::Text { text: "calling tool".into() }],
+        };
+        let tool_resp = Content {
+            role: Some("user".into()),
+            parts: vec![Part::Text { text: "tool result".into() }],
+        };
+        let final_text = Content {
+            role: Some("model".into()),
+            parts: vec![Part::Text { text: "answer".into() }],
+        };
+        db.commit_exchange(
+            s.id,
+            &user("what's up"),
+            &[model_call, tool_resp, final_text],
+            None,
+            &[],
+        )
+        .unwrap();
+        assert_eq!(db.load_messages(s.id).unwrap().len(), 6);
+
+        // Undo should remove the entire tool exchange (4 rows), not just 2.
+        let removed = db.pop_last_turn(s.id).unwrap();
+        assert_eq!(removed, 4);
+        assert_eq!(db.load_messages(s.id).unwrap().len(), 2);
+
+        // Undo again should remove the plain turn (2 rows).
+        let removed = db.pop_last_turn(s.id).unwrap();
+        assert_eq!(removed, 2);
+        assert_eq!(db.load_messages(s.id).unwrap().len(), 0);
+
+        // Undo on an empty session returns 0.
+        assert_eq!(db.pop_last_turn(s.id).unwrap(), 0);
     }
 
     #[test]

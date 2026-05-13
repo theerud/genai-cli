@@ -952,25 +952,15 @@ fn handle_tools_cmd(state: &mut ReplState, arg: Option<String>) -> Result<()> {
 }
 
 fn handle_undo(state: &mut ReplState) -> Result<()> {
-    if state.history.len() < 2 {
+    if pop_last_turn_state(state)? == 0 {
         eprintln!("(nothing to undo)");
-        return Ok(());
+    } else {
+        eprintln!("(undid last turn)");
     }
-    state.history.pop();
-    state.history.pop();
-    if let Some(s) = &state.session {
-        state.db.pop_last_turn(s.id())?;
-    }
-    eprintln!("(undid last turn)");
     Ok(())
 }
 
 async fn handle_retry(state: &mut ReplState) -> Result<()> {
-    if state.history.is_empty() {
-        eprintln!("(no previous turn to retry)");
-        return Ok(());
-    }
-    // Find the last user message; drop the last completed turn from state + DB.
     let last_user_text = state
         .history
         .iter()
@@ -983,19 +973,43 @@ async fn handle_retry(state: &mut ReplState) -> Result<()> {
             })
         });
     let Some(text) = last_user_text else {
-        eprintln!("(last user message has no text part to retry)");
+        eprintln!("(no previous turn to retry)");
         return Ok(());
     };
-    if state.history.len() >= 2 {
-        state.history.pop();
-        state.history.pop();
-    } else {
-        state.history.clear();
-    }
-    if let Some(s) = &state.session {
-        state.db.pop_last_turn(s.id())?;
+    if pop_last_turn_state(state)? == 0 {
+        eprintln!("(nothing to retry)");
+        return Ok(());
     }
     chat_turn(state, text).await
+}
+
+/// Drop the last turn from both the DB (if a session is active) and the
+/// in-memory history. With a session, the DB is the source of truth for how
+/// many rows the turn covers; without one, we fall back to "everything since
+/// the last user message" so a function-calling exchange still collapses
+/// cleanly.
+fn pop_last_turn_state(state: &mut ReplState) -> Result<usize> {
+    if let Some(s) = &state.session {
+        let n = state.db.pop_last_turn(s.id())?;
+        if n == 0 {
+            return Ok(0);
+        }
+        let new_len = state.history.len().saturating_sub(n);
+        state.history.truncate(new_len);
+        return Ok(n);
+    }
+    // No session: in-memory only. Find the last user-role message and drop
+    // it plus everything after.
+    let last_user = state
+        .history
+        .iter()
+        .rposition(|c| c.role.as_deref() == Some("user"));
+    let Some(idx) = last_user else {
+        return Ok(0);
+    };
+    let removed = state.history.len() - idx;
+    state.history.truncate(idx);
+    Ok(removed)
 }
 
 fn print_info(state: &ReplState) {

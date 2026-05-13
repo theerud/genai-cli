@@ -8,7 +8,7 @@ use std::io::{self, IsTerminal};
 use tokio::signal;
 
 use crate::gemini::chat::{ChatEvent, ChatRequest};
-use crate::gemini::types::{Content, Part};
+use crate::gemini::types::{Content, FinishReason, Part};
 use crate::tools;
 
 use super::ReplState;
@@ -156,7 +156,7 @@ async fn consume_stream(
                 }
                 Some(Ok(ChatEvent::Finish { prompt_tokens, output_tokens, reason, message })) => {
                     *last_usage = (prompt_tokens, output_tokens);
-                    warn_abnormal_finish(accumulated, &reason, message.as_deref());
+                    warn_abnormal_finish(accumulated, reason.as_ref(), message.as_deref());
                     return Ok(());
                 }
             }
@@ -167,11 +167,11 @@ async fn consume_stream(
 /// Emit a stderr diagnostic when the model finished for a reason other than
 /// `STOP`. Silent abnormal completions (e.g. `MALFORMED_FUNCTION_CALL`) leave
 /// the user staring at an empty prompt with no idea what went wrong.
-fn warn_abnormal_finish(text: &str, reason: &Option<String>, message: Option<&str>) {
-    let Some(r) = reason.as_deref() else {
+fn warn_abnormal_finish(text: &str, reason: Option<&FinishReason>, message: Option<&str>) {
+    let Some(r) = reason else {
         return;
     };
-    if r == "STOP" {
+    if r.is_normal() {
         return;
     }
     if text.is_empty() {

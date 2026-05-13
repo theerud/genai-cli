@@ -5,8 +5,8 @@ use tracing::{debug, trace};
 
 use super::Client;
 use super::types::{
-    ApiErrorEnvelope, Content, GenerateContentRequest, GenerateContentResponse, GenerationConfig,
-    Part, Tool,
+    ApiErrorEnvelope, Content, FinishReason, GenerateContentRequest, GenerateContentResponse,
+    GenerationConfig, Part, Tool,
 };
 
 pub struct ChatRequest {
@@ -22,10 +22,10 @@ pub enum ChatEvent {
     Finish {
         prompt_tokens: Option<u32>,
         output_tokens: Option<u32>,
-        /// The server-reported reason. `"STOP"` means a normal completion; any
-        /// other value (`MALFORMED_FUNCTION_CALL`, `SAFETY`, `RECITATION`, …)
-        /// is worth surfacing to the user, especially when no text was emitted.
-        reason: Option<String>,
+        /// The server-reported reason. Anything other than
+        /// `FinishReason::Stop` is worth surfacing to the user, especially
+        /// when no text was emitted.
+        reason: Option<FinishReason>,
         /// Free-form server message attached to abnormal finishes (e.g. the
         /// rejected function-call body for `MALFORMED_FUNCTION_CALL`).
         message: Option<String>,
@@ -142,7 +142,7 @@ fn parse_sse_data(data: &str) -> Result<Vec<ChatEvent>> {
         serde_json::from_str(data).with_context(|| format!("parsing SSE data: {data}"))?;
 
     let mut text = String::new();
-    let mut reason: Option<String> = None;
+    let mut reason: Option<FinishReason> = None;
     let mut message: Option<String> = None;
     for c in &resp.candidates {
         if let Some(content) = &c.content {

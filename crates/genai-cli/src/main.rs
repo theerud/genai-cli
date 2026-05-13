@@ -20,7 +20,7 @@ use gemini::Client;
 use gemini::chat::{ChatEvent, ChatRequest};
 use gemini::image::ImageRequest;
 use gemini::tts::{MusicRequest, TtsRequest};
-use gemini::types::{Content, GenerationConfig, Part};
+use gemini::types::{Content, FinishReason, GenerationConfig, Part};
 use models::alias::{self, ResolvedModel};
 use output::{expand_path, write_audio, write_images};
 use repl::render::{self};
@@ -355,7 +355,7 @@ async fn run_one_shot_chat(
 
     let mut prompt_tok: Option<u32> = None;
     let mut output_tok: Option<u32> = None;
-    let mut finish_reason: Option<String> = None;
+    let mut finish_reason: Option<FinishReason> = None;
     let mut finish_message: Option<String> = None;
     while let Some(ev) = stream.next().await {
         match ev? {
@@ -377,8 +377,8 @@ async fn run_one_shot_chat(
         }
     }
     renderer.finish();
-    if let Some(r) = finish_reason.as_deref()
-        && r != "STOP"
+    if let Some(r) = finish_reason.as_ref()
+        && !r.is_normal()
     {
         if accumulated.is_empty() {
             eprintln!("(no response — finish_reason={r})");

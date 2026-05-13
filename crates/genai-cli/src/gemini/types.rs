@@ -116,9 +116,64 @@ pub struct GenerateContentResponse {
 pub struct Candidate {
     pub content: Option<Content>,
     #[serde(default)]
-    pub finish_reason: Option<String>,
+    pub finish_reason: Option<FinishReason>,
     #[serde(default)]
     pub finish_message: Option<String>,
+}
+
+/// Why the model stopped producing tokens. `Stop` is the only one that
+/// usually deserves silence from the CLI; anything else is worth surfacing
+/// because it means truncation or refusal. Unknown values from the wire
+/// are kept verbatim as `Other(String)` instead of being lost.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FinishReason {
+    Stop,
+    MaxTokens,
+    Safety,
+    Recitation,
+    MalformedFunctionCall,
+    Language,
+    Blocklist,
+    ProhibitedContent,
+    Spii,
+    Other,
+    Unspecified,
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+impl FinishReason {
+    /// True for the only finish that means "the model produced a full
+    /// answer." Everything else means truncation, refusal, or worse.
+    pub fn is_normal(&self) -> bool {
+        matches!(self, FinishReason::Stop)
+    }
+
+    /// Stable wire-shaped label suitable for logs and the user-facing
+    /// diagnostic. Matches Gemini's SCREAMING_SNAKE_CASE convention.
+    pub fn as_str(&self) -> &str {
+        match self {
+            FinishReason::Stop => "STOP",
+            FinishReason::MaxTokens => "MAX_TOKENS",
+            FinishReason::Safety => "SAFETY",
+            FinishReason::Recitation => "RECITATION",
+            FinishReason::MalformedFunctionCall => "MALFORMED_FUNCTION_CALL",
+            FinishReason::Language => "LANGUAGE",
+            FinishReason::Blocklist => "BLOCKLIST",
+            FinishReason::ProhibitedContent => "PROHIBITED_CONTENT",
+            FinishReason::Spii => "SPII",
+            FinishReason::Other => "OTHER",
+            FinishReason::Unspecified => "FINISH_REASON_UNSPECIFIED",
+            FinishReason::Unknown(s) => s,
+        }
+    }
+}
+
+impl std::fmt::Display for FinishReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -1169,12 +1169,35 @@ async fn consume_stream(
                     accumulated.push_str(&text);
                     renderer.push(&text);
                 }
-                Some(Ok(ChatEvent::Finish { prompt_tokens, output_tokens, .. })) => {
+                Some(Ok(ChatEvent::Finish { prompt_tokens, output_tokens, reason, message })) => {
                     *last_usage = (prompt_tokens, output_tokens);
+                    warn_abnormal_finish(accumulated, &reason, message.as_deref());
                     return Ok(());
                 }
             }
         }
+    }
+}
+
+/// Emit a stderr diagnostic when the model finished for a reason other than
+/// `STOP`. Silent abnormal completions (e.g. `MALFORMED_FUNCTION_CALL`) leave
+/// the user staring at an empty prompt with no idea what went wrong.
+fn warn_abnormal_finish(text: &str, reason: &Option<String>, message: Option<&str>) {
+    let Some(r) = reason.as_deref() else {
+        return;
+    };
+    if r == "STOP" {
+        return;
+    }
+    if text.is_empty() {
+        eprintln!("(no response — finish_reason={r})");
+    } else {
+        eprintln!("(finish_reason={r})");
+    }
+    if let Some(m) = message
+        && !m.is_empty()
+    {
+        eprintln!("  {m}");
     }
 }
 

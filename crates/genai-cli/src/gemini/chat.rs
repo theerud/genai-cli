@@ -21,6 +21,13 @@ pub enum ChatEvent {
     Finish {
         prompt_tokens: Option<u32>,
         output_tokens: Option<u32>,
+        /// The server-reported reason. `"STOP"` means a normal completion; any
+        /// other value (`MALFORMED_FUNCTION_CALL`, `SAFETY`, `RECITATION`, …)
+        /// is worth surfacing to the user, especially when no text was emitted.
+        reason: Option<String>,
+        /// Free-form server message attached to abnormal finishes (e.g. the
+        /// rejected function-call body for `MALFORMED_FUNCTION_CALL`).
+        message: Option<String>,
     },
 }
 
@@ -131,7 +138,8 @@ fn parse_sse_data(data: &str) -> Result<Vec<ChatEvent>> {
         serde_json::from_str(data).with_context(|| format!("parsing SSE data: {data}"))?;
 
     let mut text = String::new();
-    let mut has_finish = false;
+    let mut reason: Option<String> = None;
+    let mut message: Option<String> = None;
     for c in &resp.candidates {
         if let Some(content) = &c.content {
             for part in &content.parts {
@@ -141,7 +149,8 @@ fn parse_sse_data(data: &str) -> Result<Vec<ChatEvent>> {
             }
         }
         if c.finish_reason.is_some() {
-            has_finish = true;
+            reason.clone_from(&c.finish_reason);
+            message.clone_from(&c.finish_message);
         }
     }
 
@@ -150,7 +159,7 @@ fn parse_sse_data(data: &str) -> Result<Vec<ChatEvent>> {
         out.push(ChatEvent::TextDelta(text));
     }
     let usage = resp.usage_metadata;
-    if has_finish || usage.is_some() {
+    if reason.is_some() || usage.is_some() {
         let (prompt_tokens, output_tokens) = match &usage {
             Some(u) => (u.prompt_token_count, u.candidates_token_count),
             None => (None, None),
@@ -158,6 +167,8 @@ fn parse_sse_data(data: &str) -> Result<Vec<ChatEvent>> {
         out.push(ChatEvent::Finish {
             prompt_tokens,
             output_tokens,
+            reason,
+            message,
         });
     }
     Ok(out)

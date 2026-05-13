@@ -410,6 +410,8 @@ async fn run_one_shot_chat(
 
     let mut prompt_tok: Option<u32> = None;
     let mut output_tok: Option<u32> = None;
+    let mut finish_reason: Option<String> = None;
+    let mut finish_message: Option<String> = None;
     while let Some(ev) = stream.next().await {
         match ev? {
             ChatEvent::TextDelta(text) => {
@@ -419,14 +421,31 @@ async fn run_one_shot_chat(
             ChatEvent::Finish {
                 prompt_tokens,
                 output_tokens,
-                ..
+                reason,
+                message,
             } => {
                 prompt_tok = prompt_tokens;
                 output_tok = output_tokens;
+                finish_reason = reason;
+                finish_message = message;
             }
         }
     }
     renderer.finish();
+    if let Some(r) = finish_reason.as_deref()
+        && r != "STOP"
+    {
+        if accumulated.is_empty() {
+            eprintln!("(no response — finish_reason={r})");
+        } else {
+            eprintln!("(finish_reason={r})");
+        }
+        if let Some(m) = finish_message.as_deref()
+            && !m.is_empty()
+        {
+            eprintln!("  {m}");
+        }
+    }
     drop(renderer);
     if let (Some(p), Some(o)) = (prompt_tok, output_tok) {
         let cost = registry

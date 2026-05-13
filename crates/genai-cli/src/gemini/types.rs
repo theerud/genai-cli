@@ -117,6 +117,8 @@ pub struct Candidate {
     pub content: Option<Content>,
     #[serde(default)]
     pub finish_reason: Option<String>,
+    #[serde(default)]
+    pub finish_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

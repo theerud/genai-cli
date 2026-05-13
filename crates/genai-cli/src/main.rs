@@ -410,16 +410,30 @@ async fn run_one_shot_chat(
     }
 
     if let (Some(s), Some(db)) = (active.as_ref(), db_opt.as_mut()) {
-        let hashes = session::persist_attachments(db, &attachments)?;
         let assistant = Content {
             role: Some("model".to_string()),
             parts: vec![Part::Text { text: accumulated }],
         };
-        db.commit_turn(s.id(), &user_msg, &assistant, Some(&resolved.id), &hashes)?;
+        if let Err(e) = persist_one_shot_turn(db, s.id(), &user_msg, &assistant, &resolved.id, &attachments)
+        {
+            eprintln!("warning: failed to persist turn: {e}");
+        }
     }
 
     let _ = io::stderr().flush();
     Ok(())
+}
+
+fn persist_one_shot_turn(
+    db: &mut session::db::Database,
+    session_id: i64,
+    user: &Content,
+    assistant: &Content,
+    model_id: &str,
+    attachments: &[session::attachment::Attachment],
+) -> Result<()> {
+    let hashes = session::persist_attachments(db, attachments)?;
+    db.commit_turn(session_id, user, assistant, Some(model_id), &hashes)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -470,18 +484,32 @@ async fn run_one_shot_with_tools(
         }
     }
 
-    if let (Some(s), Some(mut db)) = (active.as_ref(), db_opt) {
-        let hashes = session::persist_attachments(&mut db, &attachments)?;
-        db.commit_exchange(
+    if let (Some(s), Some(mut db)) = (active.as_ref(), db_opt)
+        && let Err(e) = persist_one_shot_exchange(
+            &mut db,
             s.id(),
             &user_msg,
             &outcome.exchange,
-            Some(&resolved.id),
-            &hashes,
-        )?;
+            &resolved.id,
+            &attachments,
+        )
+    {
+        eprintln!("warning: failed to persist turn: {e}");
     }
     let _ = io::stderr().flush();
     Ok(())
+}
+
+fn persist_one_shot_exchange(
+    db: &mut session::db::Database,
+    session_id: i64,
+    user: &Content,
+    chain: &[Content],
+    model_id: &str,
+    attachments: &[session::attachment::Attachment],
+) -> Result<()> {
+    let hashes = session::persist_attachments(db, attachments)?;
+    db.commit_exchange(session_id, user, chain, Some(model_id), &hashes)
 }
 
 fn build_generation_config(

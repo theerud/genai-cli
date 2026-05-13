@@ -55,15 +55,17 @@ pub(super) async fn chat_turn(state: &mut ReplState, user_text: String) -> Resul
                 parts: vec![Part::Text { text: accumulated }],
             };
             if let Some(s) = &state.session {
-                let hashes = crate::session::persist_attachments(&mut state.db, &attachments)?;
                 let session_id = s.id();
-                state.db.commit_turn(
+                if let Err(e) = persist_turn(
+                    &mut state.db,
                     session_id,
                     &user_msg,
                     &assistant,
-                    Some(&state.model.id),
-                    &hashes,
-                )?;
+                    &state.model.id,
+                    &attachments,
+                ) {
+                    eprintln!("warning: failed to persist turn (in-memory history kept): {e}");
+                }
             }
             state.history.push(user_msg);
             state.history.push(assistant);
@@ -79,6 +81,30 @@ pub(super) async fn chat_turn(state: &mut ReplState, user_text: String) -> Resul
         }
         Err(StreamErr::Failed(e)) => Err(e),
     }
+}
+
+fn persist_turn(
+    db: &mut crate::session::db::Database,
+    session_id: i64,
+    user: &Content,
+    assistant: &Content,
+    model_id: &str,
+    attachments: &[crate::session::attachment::Attachment],
+) -> Result<()> {
+    let hashes = crate::session::persist_attachments(db, attachments)?;
+    db.commit_turn(session_id, user, assistant, Some(model_id), &hashes)
+}
+
+fn persist_exchange(
+    db: &mut crate::session::db::Database,
+    session_id: i64,
+    user: &Content,
+    chain: &[Content],
+    model_id: &str,
+    attachments: &[crate::session::attachment::Attachment],
+) -> Result<()> {
+    let hashes = crate::session::persist_attachments(db, attachments)?;
+    db.commit_exchange(session_id, user, chain, Some(model_id), &hashes)
 }
 
 async fn chat_turn_with_tools(
@@ -112,15 +138,17 @@ async fn chat_turn_with_tools(
     renderer.finish();
 
     if let Some(s) = &state.session {
-        let hashes = crate::session::persist_attachments(&mut state.db, &attachments)?;
         let session_id = s.id();
-        state.db.commit_exchange(
+        if let Err(e) = persist_exchange(
+            &mut state.db,
             session_id,
             &user_msg,
             &outcome.exchange,
-            Some(&state.model.id),
-            &hashes,
-        )?;
+            &state.model.id,
+            &attachments,
+        ) {
+            eprintln!("warning: failed to persist turn (in-memory history kept): {e}");
+        }
     }
     state.history.push(user_msg);
     state.history.extend(outcome.exchange);

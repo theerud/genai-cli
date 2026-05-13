@@ -33,6 +33,7 @@ async fn main() {
 }
 
 async fn real_main() -> Result<()> {
+    init_tracing();
     let cli = Cli::parse();
     let cfg = config::load()?;
 
@@ -55,6 +56,26 @@ async fn real_main() -> Result<()> {
         Some(prompt) => run_one_shot(&cfg, &cli, prompt).await,
         None => run_repl(cfg, cli.session.as_deref(), cli.role.as_deref()).await,
     }
+}
+
+/// Install a stderr `tracing` subscriber filtered by the `GENAI_LOG`
+/// environment variable (falls back to `RUST_LOG`). With neither set, no
+/// trace output is produced — user-visible messages stay on the usual
+/// stderr/stdout paths. Examples: `GENAI_LOG=genai=debug`,
+/// `GENAI_LOG=info,genai::gemini=trace`.
+fn init_tracing() {
+    use tracing_subscriber::{EnvFilter, fmt};
+    let filter = std::env::var("GENAI_LOG")
+        .or_else(|_| std::env::var("RUST_LOG"))
+        .ok()
+        .and_then(|s| EnvFilter::try_new(s).ok())
+        .unwrap_or_else(|| EnvFilter::new("off"));
+    let _ = fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(filter)
+        .with_target(true)
+        .without_time()
+        .try_init();
 }
 
 /// Print an anyhow error and its cause chain in a stable format suitable for

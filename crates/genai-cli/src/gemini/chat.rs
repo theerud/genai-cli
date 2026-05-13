@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{Stream, StreamExt};
 use std::pin::Pin;
+use tracing::{debug, trace};
 
 use super::Client;
 use super::types::{
@@ -45,6 +46,7 @@ impl Client {
             "{}/v1beta/models/{}:generateContent",
             self.base, req.model
         );
+        debug!(model = %req.model, msgs = req.contents.len(), "generate_content");
         let body = GenerateContentRequest {
             contents: req.contents,
             system_instruction: req.system_instruction.map(|t| Content {
@@ -88,6 +90,7 @@ impl Client {
             "{}/v1beta/models/{}:streamGenerateContent?alt=sse",
             self.base, req.model
         );
+        debug!(model = %req.model, msgs = req.contents.len(), "stream_chat");
 
         let body = GenerateContentRequest {
             contents: req.contents,
@@ -134,6 +137,7 @@ impl Client {
 }
 
 fn parse_sse_data(data: &str) -> Result<Vec<ChatEvent>> {
+    trace!(bytes = data.len(), "sse event");
     let resp: GenerateContentResponse =
         serde_json::from_str(data).with_context(|| format!("parsing SSE data: {data}"))?;
 

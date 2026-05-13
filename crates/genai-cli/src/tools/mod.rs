@@ -73,6 +73,7 @@ fn build_registry() -> HashMap<String, Box<dyn LocalTool>> {
     for tool in local::builtin_locals() {
         map.insert(tool.name().to_string(), tool);
     }
+    let builtin_count = map.len();
     if let Ok(paths) = crate::config::paths() {
         let tools_dir = paths.config_dir.join("tools");
         let bin_dir = tools_dir.join("bin");
@@ -87,6 +88,11 @@ fn build_registry() -> HashMap<String, Box<dyn LocalTool>> {
             map.insert(name, Box::new(tool));
         }
     }
+    tracing::debug!(
+        builtin = builtin_count,
+        user = map.len() - builtin_count,
+        "local tool registry loaded"
+    );
     map
 }
 

@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use serde_json::Value;
+use tracing::debug;
 
 use crate::gemini::Client;
 use crate::gemini::chat::ChatRequest;
@@ -51,7 +52,8 @@ pub async fn run(
     let mut last_prompt;
     let mut last_output;
 
-    for _ in 0..MAX_TOOL_ITERATIONS {
+    for iter in 0..MAX_TOOL_ITERATIONS {
+        debug!(iteration = iter, "tool loop iteration");
         let chat_req = ChatRequest {
             model: req.model.clone(),
             contents: contents.clone(),
@@ -108,6 +110,7 @@ pub async fn run(
                 continue;
             };
             let summary = tool.describe_call(&call.args);
+            debug!(tool = %call.name, %summary, "tool call");
             ui.announce_call(&call.name, &summary);
 
             let response_value = if tool.requires_confirmation() {

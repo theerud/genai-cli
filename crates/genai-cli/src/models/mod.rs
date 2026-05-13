@@ -59,6 +59,7 @@ impl ModelEntry {
 impl Registry {
     pub fn load() -> Result<Self> {
         let mut reg: Registry = toml::from_str(BUNDLED).context("parsing bundled models data")?;
+        let bundled_count = reg.models.len();
 
         if let Ok(paths) = crate::config::paths() {
             let overlay = paths.config_dir.join("models.toml");
@@ -66,6 +67,11 @@ impl Registry {
                 merge_overlay(&mut reg, &overlay)?;
             }
         }
+        tracing::debug!(
+            bundled = bundled_count,
+            total = reg.models.len(),
+            "model registry loaded"
+        );
         Ok(reg)
     }
 

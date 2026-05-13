@@ -14,6 +14,7 @@ pub enum DotCmd {
     Tts(ActionArgs),
     Music(ActionArgs),
     Tools(Option<String>),
+    Preview(String),
     Undo,
     Retry,
     Unknown(String),
@@ -86,6 +87,10 @@ pub fn parse(line: &str) -> Option<DotCmd> {
             Err(e) => DotCmd::Unknown(format!(".music: {e}")),
         },
         "tools" => DotCmd::Tools(opt_first(&tail)),
+        "preview" => match opt_first(&tail) {
+            Some(path) => DotCmd::Preview(path),
+            None => DotCmd::Unknown(".preview requires <path>".to_string()),
+        },
         _ => DotCmd::Unknown(format!("unknown command: .{head}")),
     };
     Some(cmd)
@@ -235,6 +240,15 @@ mod tests {
         assert!(matches!(parse(".session rename foo"), Some(DotCmd::Session(SessionCmd::Rename { .. }))));
         assert!(matches!(parse(".session list"), Some(DotCmd::Session(SessionCmd::List))));
         assert!(matches!(parse(".session drop"), Some(DotCmd::Session(SessionCmd::Drop))));
+    }
+
+    #[test]
+    fn preview_parses_path() {
+        match parse(".preview /tmp/foo.png") {
+            Some(DotCmd::Preview(p)) => assert_eq!(p, "/tmp/foo.png"),
+            other => panic!("unexpected: {other:?}"),
+        }
+        assert!(matches!(parse(".preview"), Some(DotCmd::Unknown(_))));
     }
 
     #[test]

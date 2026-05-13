@@ -66,6 +66,7 @@ pub(super) async fn handle_command(state: &mut ReplState, cmd: DotCmd) -> Result
         DotCmd::Tts(args) => media::handle_tts_cmd(state, args).await?,
         DotCmd::Music(args) => media::handle_music_cmd(state, args).await?,
         DotCmd::Tools(arg) => handle_tools_cmd(state, arg)?,
+        DotCmd::Preview(path) => handle_preview(state, &path)?,
         DotCmd::Undo => handle_undo(state)?,
         DotCmd::Retry => handle_retry(state).await?,
         DotCmd::Unknown(msg) => eprintln!("{msg}"),
@@ -197,6 +198,7 @@ Commands:
   .role [name|list|-]       switch / list / clear role
   .tools [list|name]        show / list / toggle built-in Gemini tools
   .image / .tts / .music    one-off generation in REPL
+  .preview <path>    render an image inline (Kitty / iTerm2 terminals)
   .undo              drop last completed turn from history (+ session DB)
   .retry             re-run the last user message
 "
@@ -248,6 +250,35 @@ fn handle_tools_cmd(state: &mut ReplState, arg: Option<String>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn handle_preview(state: &ReplState, path: &str) -> Result<()> {
+    let expanded = output::expand_path(path);
+    let bytes = std::fs::read(&expanded)
+        .with_context(|| format!("reading {expanded}"))?;
+    let pref =
+        output::image_preview::Preference::from_config(state.cfg.output.image_preview.as_deref());
+    let proto = output::image_preview::detect(pref);
+    if matches!(proto, output::image_preview::Protocol::None) {
+        eprintln!("(no image preview: terminal not supported or image_preview = off)");
+        return Ok(());
+    }
+    // Kitty's f=100 transport only accepts PNG; iTerm2's OSC 1337 accepts
+    // any format. Warn the user when we know rendering will silently fail.
+    if matches!(proto, output::image_preview::Protocol::Kitty)
+        && !looks_like_png(&bytes)
+    {
+        eprintln!(
+            "warning: file isn't PNG; the kitty graphics protocol may not render it. \
+             Try `image_preview = \"iterm2\"` in config if your terminal supports it."
+        );
+    }
+    output::image_preview::show(pref, &bytes)?;
+    Ok(())
+}
+
+fn looks_like_png(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
 }
 
 fn handle_undo(state: &mut ReplState) -> Result<()> {

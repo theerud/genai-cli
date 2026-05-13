@@ -13,7 +13,7 @@ use rustyline::validate::Validator;
 
 const DOT_COMMANDS: &[&str] = &[
     "help", "exit", "quit", "info", "clear", "model", "set", "file", "edit", "role", "session",
-    "image", "tts", "music", "tools", "undo", "retry",
+    "image", "tts", "music", "tools", "preview", "undo", "retry",
 ];
 
 const SESSION_SUBCOMMANDS: &[&str] = &[
@@ -118,7 +118,7 @@ impl Completer for ReplHelper {
                     .chain(std::iter::once("list")),
                 &token.text,
             ),
-            "file" | "image" | "tts" | "music" => {
+            "file" | "image" | "tts" | "music" | "preview" => {
                 // Defer to the filesystem completer on the current token.
                 return self.files.complete(line, pos, _ctx);
             }

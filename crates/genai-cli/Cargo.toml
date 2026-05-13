@@ -18,7 +18,6 @@ toml.workspace = true
 clap.workspace = true
 rusqlite.workspace = true
 rustyline.workspace = true
-crossterm.workspace = true
 directories.workspace = true
 sha2.workspace = true
 syntect.workspace = true

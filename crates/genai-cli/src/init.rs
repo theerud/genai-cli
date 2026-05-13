@@ -75,10 +75,12 @@ pub fn run(force: bool) -> Result<()> {
         .unwrap_or(default_idx + 1);
     let default_model = chat_models[idx - 1].to_string();
 
-    // Starter role
+    // Starter roles
     eprintln!();
-    eprintln!("Step 3/3 — Starter role (optional)");
-    let want_role = ui::confirm("Create a starter 'coding' role?", true)?;
+    eprintln!("Step 3/3 — Starter roles (optional)");
+    eprintln!("  coding    — senior-engineer system prompt, gemini-2.5-pro");
+    eprintln!("  research  — citation-first assistant with google_search enabled");
+    let want_roles = ui::confirm("Install both?", true)?;
 
     // Write .env
     std::fs::write(&env_path, format!("GEMINI_API_KEY={api_key}\n"))
@@ -90,13 +92,20 @@ pub fn run(force: bool) -> Result<()> {
     std::fs::write(&config_path, cfg_body)
         .with_context(|| format!("writing {}", config_path.display()))?;
 
-    // Optional role
-    if want_role {
+    // Optional roles
+    let mut installed_roles: Vec<&str> = Vec::new();
+    if want_roles {
         std::fs::create_dir_all(&roles_dir)?;
-        let role_path = roles_dir.join("coding.toml");
-        if !role_path.exists() || force {
-            std::fs::write(&role_path, STARTER_CODING_ROLE)
-                .with_context(|| format!("writing {}", role_path.display()))?;
+        for (name, body) in [
+            ("coding", STARTER_CODING_ROLE),
+            ("research", STARTER_RESEARCH_ROLE),
+        ] {
+            let role_path = roles_dir.join(format!("{name}.toml"));
+            if !role_path.exists() || force {
+                std::fs::write(&role_path, body)
+                    .with_context(|| format!("writing {}", role_path.display()))?;
+                installed_roles.push(name);
+            }
         }
     }
 
@@ -104,31 +113,43 @@ pub fn run(force: bool) -> Result<()> {
     eprintln!("Done.");
     eprintln!("  .env       → {}", env_path.display());
     eprintln!("  config     → {}", config_path.display());
-    if want_role {
-        eprintln!("  role       → {}/coding.toml", roles_dir.display());
+    for name in &installed_roles {
+        eprintln!("  role       → {}/{name}.toml", roles_dir.display());
     }
     eprintln!();
     eprintln!("Try it: genai \"hello\"");
+    if installed_roles.contains(&"research") {
+        eprintln!("    or: genai -r research \"what's new in <topic> this week?\"");
+    }
+    eprintln!();
+    eprintln!("Heads-up on dangerous roles:");
+    eprintln!("  Tools like `exec` and `fetch_url` give the model real reach into your");
+    eprintln!("  machine. The init wizard deliberately does NOT install a `sysadmin`-style");
+    eprintln!("  role. If you want one, see DESIGN.md (`### Tools`) for the schema and the");
+    eprintln!("  confirmation-prompt model. Treat such roles like any sudo-adjacent tool.");
     Ok(())
 }
 
 fn render_config_toml(default_model: &str) -> String {
     format!(
-        r#"# genai-cli config.
-# API key is loaded from $GEMINI_API_KEY or ~/.config/genai/.env — keep it
-# out of this file.
-
-# api_key_env = "GEMINI_API_KEY"
+        r#"# genai-cli config. See DESIGN.md for the full reference.
+#
+# The API key is loaded from $GEMINI_API_KEY, ./.env, or this directory's
+# .env — keep it out of this file. To override the env-var name:
+#
+# api_key_env = "GEMINI_PERSONAL_KEY"
+#
+# To point at a non-default Gemini endpoint:
 # api_base = "https://generativelanguage.googleapis.com"
 
 [model.chat]
 default = "{default_model}"
-# temperature = 0.7
-# max_tokens = 8192
-# system_prompt = ""
+# temperature = 0.7        # 0.0 = deterministic, 1.0 = creative
+# max_tokens = 8192        # cap response length
+# system_prompt = ""       # baseline system instruction for every chat
 
 [model.image]
-default = "gemini-2.5-flash-image"
+default = "gemini-2.5-flash-image"   # 'nano-banana'; supports image-in editing
 
 [model.tts]
 default = "gemini-2.5-flash-preview-tts"
@@ -138,13 +159,20 @@ voice = "Kore"
 default = "gemini-embedding-2"
 
 [repl]
-markdown = true
-color = true
+markdown = true            # render ANSI-colored markdown to a TTY
+color = true               # syntax-highlight fenced code blocks
 
-# Aliases: named bundles of model + per-model params.
+# Aliases are named bundles of (model, per-model params). Usable anywhere a
+# model id is expected: `genai -m pro-high "…"`, `.model pro-high` in the REPL,
+# etc. The thinking_level maps to one of: off, low, medium, high, dynamic.
+#
 # [aliases.pro-high]
 # model = "gemini-2.5-pro"
 # thinking_level = "high"
+#
+# [aliases.fast]
+# model = "gemini-2.5-flash-lite"
+# temperature = 0.3
 "#
     )
 }
@@ -157,6 +185,16 @@ it helps. Skip pleasantries; assume the reader is fluent.
 """
 temperature = 0.4
 thinking_level = "high"
+"#;
+
+const STARTER_RESEARCH_ROLE: &str = r#"# Web-grounded research assistant. Uses google_search server-side.
+model = "gemini-2.5-pro"
+system_prompt = """
+You are a research assistant. For anything time-sensitive or factual,
+call google_search first and cite the URLs you used inline. If the search
+returns nothing useful, say so rather than guessing.
+"""
+tools = ["google_search"]
 "#;
 
 #[cfg(unix)]

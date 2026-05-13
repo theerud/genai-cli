@@ -1,9 +1,10 @@
 use anyhow::{Context, Result, bail};
-use std::io::{IsTerminal, Write};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use crate::config;
 use crate::models;
+use crate::ui;
 
 pub fn run(force: bool) -> Result<()> {
     if !std::io::stdin().is_terminal() {
@@ -30,7 +31,7 @@ pub fn run(force: bool) -> Result<()> {
         if env_path.exists() {
             eprintln!("  {}", env_path.display());
         }
-        if !confirm("Overwrite?", false)? {
+        if !ui::confirm("Overwrite?", false)? {
             eprintln!("Aborted.");
             return Ok(());
         }
@@ -40,7 +41,7 @@ pub fn run(force: bool) -> Result<()> {
     eprintln!();
     eprintln!("Step 1/3 — API key");
     eprintln!("Get one at https://aistudio.google.com/apikey");
-    let api_key = prompt_secret("API key (input hidden if your tty supports it)")?;
+    let api_key = ui::read_secret("API key (input hidden if your tty supports it)")?;
     if api_key.trim().is_empty() {
         bail!("API key is required");
     }
@@ -62,7 +63,7 @@ pub fn run(force: bool) -> Result<()> {
         .iter()
         .position(|m| *m == "gemini-2.5-flash")
         .unwrap_or(0);
-    let choice = prompt_default(
+    let choice = ui::read_with_default(
         &format!("Pick by number [default: {}]", default_idx + 1),
         &(default_idx + 1).to_string(),
     )?;
@@ -77,7 +78,7 @@ pub fn run(force: bool) -> Result<()> {
     // Starter role
     eprintln!();
     eprintln!("Step 3/3 — Starter role (optional)");
-    let want_role = confirm("Create a starter 'coding' role?", true)?;
+    let want_role = ui::confirm("Create a starter 'coding' role?", true)?;
 
     // Write .env
     std::fs::write(&env_path, format!("GEMINI_API_KEY={api_key}\n"))
@@ -157,62 +158,6 @@ it helps. Skip pleasantries; assume the reader is fluent.
 temperature = 0.4
 thinking_level = "high"
 "#;
-
-fn confirm(question: &str, default_yes: bool) -> Result<bool> {
-    let suffix = if default_yes { "[Y/n]" } else { "[y/N]" };
-    eprint!("{question} {suffix} ");
-    let _ = std::io::stderr().flush();
-    let mut buf = String::new();
-    std::io::stdin().read_line(&mut buf)?;
-    let t = buf.trim().to_lowercase();
-    Ok(match t.as_str() {
-        "" => default_yes,
-        "y" | "yes" => true,
-        _ => false,
-    })
-}
-
-fn prompt_default(label: &str, default: &str) -> Result<String> {
-    eprint!("{label}: ");
-    let _ = std::io::stderr().flush();
-    let mut buf = String::new();
-    std::io::stdin().read_line(&mut buf)?;
-    let trimmed = buf.trim();
-    Ok(if trimmed.is_empty() {
-        default.to_string()
-    } else {
-        trimmed.to_string()
-    })
-}
-
-#[cfg(unix)]
-fn prompt_secret(label: &str) -> Result<String> {
-    eprint!("{label}: ");
-    let _ = std::io::stderr().flush();
-
-    // Best-effort: disable echo via stty if available. If anything fails,
-    // fall back to visible input.
-    let echo_off = std::process::Command::new("stty")
-        .arg("-echo")
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-
-    let mut buf = String::new();
-    let read_result = std::io::stdin().read_line(&mut buf);
-
-    if echo_off {
-        let _ = std::process::Command::new("stty").arg("echo").status();
-        eprintln!();
-    }
-    read_result.context("reading API key")?;
-    Ok(buf.trim().to_string())
-}
-
-#[cfg(not(unix))]
-fn prompt_secret(label: &str) -> Result<String> {
-    prompt_default(label, "")
-}
 
 #[cfg(unix)]
 fn set_user_only(path: &PathBuf) -> Result<()> {

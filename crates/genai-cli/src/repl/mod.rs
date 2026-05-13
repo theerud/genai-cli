@@ -24,6 +24,7 @@ use crate::output;
 use crate::role::{self, Role};
 use crate::session::{ActiveSession, db::Database, messages_to_contents};
 use crate::tools;
+use crate::ui;
 use commands::{ActionArgs, DotCmd, SessionCmd, parse as parse_cmd};
 use prompt::PromptState;
 use render::Renderer;
@@ -362,7 +363,7 @@ fn maybe_prompt_save_on_exit(state: &mut ReplState) -> Result<bool> {
         std::io::stdin().read_line(&mut buf)?;
         match buf.trim().to_lowercase().as_str() {
             "s" | "save" => {
-                let name = prompt_text("Session name")?;
+                let name = ui::read_required("Session name")?;
                 save_current_session_as(state, &name)?;
                 return Ok(false);
             }
@@ -387,7 +388,7 @@ fn start_ephemeral_session(state: &mut ReplState) -> Result<()> {
     if !state.history.is_empty() {
         let pair_count = state.history.len() / 2;
         if pair_count > 0
-            && prompt_yes_no(
+            && ui::confirm(
                 &format!("Include {} previous turn(s) in this temporary session?", pair_count),
                 true,
             )?
@@ -492,7 +493,7 @@ fn maybe_resolve_ephemeral_before_transition(state: &mut ReplState) -> Result<()
         std::io::stdin().read_line(&mut buf)?;
         match buf.trim().to_lowercase().as_str() {
             "s" | "save" => {
-                let name = prompt_text("Session name")?;
+                let name = ui::read_required("Session name")?;
                 save_current_session_as(state, &name)?;
                 return Ok(());
             }
@@ -551,33 +552,6 @@ fn is_fresh_user_message(c: &Content) -> bool {
         }
     }
     has_text
-}
-
-fn prompt_yes_no(question: &str, default_yes: bool) -> Result<bool> {
-    use std::io::Write;
-    let suffix = if default_yes { "[Y/n]" } else { "[y/N]" };
-    eprint!("{question} {suffix} ");
-    let _ = std::io::stderr().flush();
-    let mut buf = String::new();
-    std::io::stdin().read_line(&mut buf)?;
-    let t = buf.trim().to_lowercase();
-    Ok(match t.as_str() {
-        "" => default_yes,
-        "y" | "yes" => true,
-        _ => false,
-    })
-}
-
-fn prompt_text(label: &str) -> Result<String> {
-    eprint!("{label}: ");
-    let _ = std::io::stderr().flush();
-    let mut buf = String::new();
-    std::io::stdin().read_line(&mut buf)?;
-    let out = buf.trim().to_string();
-    if out.is_empty() {
-        anyhow::bail!("name is required")
-    }
-    Ok(out)
 }
 
 fn handle_role_cmd(state: &mut ReplState, arg: Option<String>) -> Result<()> {
@@ -681,7 +655,7 @@ async fn handle_image_cmd(state: &mut ReplState, args: ActionArgs) -> Result<()>
 
     let out_path = match &args.output {
         Some(s) => s.clone(),
-        None => prompt_user("Output path (or '-' for stdout)")?,
+        None => ui::read_line("Output path (or '-' for stdout)")?,
     };
 
     let inputs = output::load_input_images(&args.files)?;
@@ -710,7 +684,7 @@ async fn handle_tts_cmd(state: &mut ReplState, args: ActionArgs) -> Result<()> {
 
     let out_path = match &args.output {
         Some(s) => s.clone(),
-        None => prompt_user("Output path (or '-' for stdout)")?,
+        None => ui::read_line("Output path (or '-' for stdout)")?,
     };
     let voice = args
         .voice
@@ -745,7 +719,7 @@ async fn handle_music_cmd(state: &mut ReplState, args: ActionArgs) -> Result<()>
 
     let out_path = match &args.output {
         Some(s) => s.clone(),
-        None => prompt_user("Output path (or '-' for stdout)")?,
+        None => ui::read_line("Output path (or '-' for stdout)")?,
     };
 
     let audio = state
@@ -757,14 +731,6 @@ async fn handle_music_cmd(state: &mut ReplState, args: ActionArgs) -> Result<()>
         .await?;
     output::write_audio(&out_path, &audio)?;
     Ok(())
-}
-
-fn prompt_user(label: &str) -> Result<String> {
-    eprint!("{label}: ");
-    let _ = std::io::stderr().flush();
-    let mut buf = String::new();
-    std::io::stdin().read_line(&mut buf)?;
-    Ok(buf.trim().to_string())
 }
 
 fn apply_set(state: &mut ReplState, key: &str, value: &str) -> Result<()> {

@@ -8,6 +8,7 @@ mod repl;
 mod role;
 mod session;
 mod tools;
+mod ui;
 
 use anyhow::{Result, bail};
 use clap::Parser;

@@ -24,29 +24,35 @@ Resolution order: process env (default `GEMINI_API_KEY`, name overridable via `a
 
 ```
 ~/.config/genai/
-  config.toml
-  aliases.toml          # optional, can also live inline in config.toml
+  config.toml           # aliases live inline as [aliases.NAME] tables
   roles/
     <name>.toml
+  tools/
+    <name>.toml         # user-defined function tools
+    bin/                # scripts reachable from user tools (prepended to PATH)
   models.toml           # optional user overlay over bundled registry
 
 ~/.local/share/genai/
   data.db               # single SQLite DB (sessions, messages, attachments index)
   attachments/<hash>.*  # content-addressed blobs
 
-~/.cache/genai/         # regenerable
+~/.cache/genai/         # regenerable: rustyline history, etc.
 ```
+
+Set `GENAI_HOME=/path/to/dir` to override the root: config/data/cache then live under that single tree (handy for scratch / test isolation).
 
 ## SQLite schema (sketch)
 
 ```
-sessions(id, name UNIQUE, model, system_prompt, created_at, updated_at, meta JSON)
-messages(id, session_id, seq, role, parts JSON, token_count, created_at)
+sessions(id, name UNIQUE, model, system_prompt, created_at, updated_at, ephemeral, meta JSON)
+messages(id, session_id, seq, turn_id, role, parts JSON, token_count, created_at)
 attachments(hash PRIMARY KEY, mime, size, created_at)
 message_attachments(message_id, attachment_hash)
 ```
 
-- `parts` always an array of typed parts, matching Gemini's API shape. Forward-compat for multimodal.
+- `parts` is always an array of typed parts matching Gemini's API shape (text, inlineData, functionCall, functionResponse). Forward-compat for multimodal.
+- `messages.turn_id` groups all rows belonging to one logical user turn — for plain chat that's two rows (user + model), for a function-calling exchange it's the user prompt plus the full model/tool back-and-forth. `pop_last_turn` deletes by `turn_id`.
+- `sessions.ephemeral = 1` flags temporary REPL sessions; they don't appear in listings and are pruned when the user discards them.
 - WAL mode. Single open connection per process.
 - Attachments addressed by sha256 (16 hex chars). GC = delete blobs not referenced by any `message_attachments`.
 
@@ -54,7 +60,7 @@ message_attachments(message_id, attachment_hash)
 
 TOML files under `~/.config/genai/roles/<name>.toml`. Bundle model + system_prompt + params + optional capability defaults.
 
-Supported role fields: `model`, `system_prompt`, `temperature`, `max_tokens`, `thinking_level`, `output_dir`, `tools`.
+Supported role fields: `model`, `system_prompt`, `temperature`, `max_tokens`, `thinking_level`, `tools`.
 
 - CLI: `genai -r <role>` or `-r <role>` then drops to REPL.
 - REPL: `.role <name>` to switch, `.role -` to clear, `.role` lists.
@@ -153,7 +159,7 @@ Rustyline-based. Prompt shape: `>`, `*>` (session, no role), `myrole>` (role, no
 | `.set <key> <value>` | Adjust params (temperature, max-tokens, ...) |
 | `.file <path>...` | Queue attachments for next message |
 | `.edit` | Open `$EDITOR` for multi-line prompt |
-| `.tools [name]` | List or toggle Gemini server-side built-in tools |
+| `.tools [list\|name]` | List or toggle tools (built-in Gemini, built-in local, user-defined) |
 | `.undo` | Drop the last completed turn from the session |
 | `.retry` | Re-run the previous user prompt |
 | `.image [-m model] [-o path] "prompt"` | Image generation |
@@ -169,8 +175,8 @@ Ephemeral session flow: `.session start` creates an unsaved session; leaving it 
 1. Read input, dispatch dot-command or chat turn.
 2. Resolve effective config via precedence chain.
 3. Build request from in-memory session history + pending attachments.
-4. Stream Gemini API.
-5. **On success only:** single transaction inserts user message + assistant message + attachments, updates `sessions.updated_at`.
+4. Stream Gemini API (plain chat) **or** run the function-call loop (when any local tool is active).
+5. **On success only:** single transaction inserts the user message plus the full assistant/tool exchange (one row for plain chat, multiple for a tool turn — all sharing one `turn_id`) and attachments, updates `sessions.updated_at`.
 6. On failure or Ctrl-C cancel: nothing persisted. Rustyline history still has the input for up-arrow retry.
 
 Rationale: a truncated assistant response in persisted history would be sent back to the API as context and confuse the model. Only complete turns commit.
@@ -195,39 +201,47 @@ Cargo workspace:
 
 ```
 crates/
-├── genai/                # main binary
+├── genai-cli/            # main binary (name: `genai`)
 │   └── src/
-│       ├── main.rs
+│       ├── main.rs       # top-level entry, error formatter, tracing init
 │       ├── cli.rs        # clap definitions
-│       ├── config.rs
+│       ├── config.rs     # config loading, paths(), GENAI_HOME override
+│       ├── init.rs       # `genai init` first-run wizard
+│       ├── output.rs     # shared write_audio / write_images / expand_path
 │       ├── role.rs
-│       ├── gemini/       # API client: chat, image, tts, embed, types
+│       ├── ui.rs         # confirm / read_line / read_required / read_secret
+│       ├── gemini/       # API client: chat, image, tts, types
 │       ├── session/      # session, db, attachment
-│       ├── repl/         # main loop, commands, prompt, render
+│       ├── repl/         # chat, commands, complete, dispatch, media, prompt, render, sessions
 │       ├── models/       # registry + alias resolution (data.toml bundled)
-│       └── error.rs
-└── genai-models-gen/     # dev-only tool
+│       └── tools/        # builtin, cli_ui, local, process, runner, user
+└── genai-models-gen/     # dev-only tool, not in release binary
 ```
 
-## Dependencies (planned)
+## Dependencies
 
 ```
-tokio (rt-multi-thread, macros, fs, io-util, signal)
-reqwest (rustls-tls, stream, json; no default features)
+tokio (rt-multi-thread, macros, signal)
+reqwest (native-tls, stream, json, http2; no default features)
 serde, serde_json
 toml
 clap (derive)
 rusqlite (bundled)
 rustyline
-crossterm
 directories
 sha2
-syntect (curated syntax set)
-thiserror, anyhow
-futures-util
+syntect (default-fancy; no default features)
+anyhow
+futures-util, async-stream, bytes
+base64
+tracing, tracing-subscriber (fmt + env-filter, no default features)
 ```
 
 Markdown rendering: hand-rolled, no library.
+
+## Logging
+
+No log output by default. Opt in via `GENAI_LOG=...` (falls back to `RUST_LOG`) using the standard `tracing-subscriber` filter syntax — e.g. `GENAI_LOG=genai=debug` to see API requests, SSE event sizes, tool-loop iterations, and registry loads on stderr. User-facing messages are not affected by the log filter; they stay on the usual stderr/stdout paths.
 
 ## Release profile
 

@@ -6,7 +6,7 @@ Inspired by [aichat](https://github.com/sigoden/aichat) but Gemini-only and depe
 
 ## Install
 
-Requires Rust nightly (edition 2024) and OpenSSL development headers on the host (for `native-tls`).
+Requires Rust 1.88+ (edition 2024, let-chains) and OpenSSL development headers on the host (for `native-tls`).
 
 ```bash
 git clone <repo> genai-cli && cd genai-cli
@@ -36,6 +36,13 @@ To pull from a differently-named env var, set in `config.toml`:
 ```toml
 api_key_env = "GEMINI_PERSONAL_KEY"
 ```
+
+## Other environment variables
+
+| Variable | Effect |
+|---|---|
+| `GENAI_HOME` | Override the config / data / cache root. With `GENAI_HOME=/tmp/scratch`, the CLI looks at `/tmp/scratch/{config,data,cache}/` instead of the XDG defaults. Useful for sandboxed testing. |
+| `GENAI_LOG` (falls back to `RUST_LOG`) | `tracing` filter for debug output to stderr. Examples: `genai=debug`, `info,genai::gemini=trace`. Empty/unset means no log output. |
 
 ## Quick start
 
@@ -114,7 +121,7 @@ Prompt markers:
 | `.session delete <name\|id>` | delete a saved session |
 | `.session export <name\|id>` | export current session as JSONL |
 | `.role [name\|list\|-]` | switch / list / clear role |
-| `.tools [name]` | list or toggle Gemini server-side built-in tools |
+| `.tools [list\|name]` | list or toggle tools (built-in Gemini, built-in local, user-defined) |
 | `.undo` | drop the last completed turn |
 | `.retry` | re-run the previous user prompt |
 | `.image [-m MODEL] [-o PATH] [-f FILE] "prompt"` | generate an image |
@@ -281,7 +288,7 @@ GEMINI_API_KEY=... cargo run -p genai-models-gen
 - **TTS** assumes 16-bit mono PCM @ 24 kHz when wrapping into WAV (matches current Gemini output). Multi-channel TTS would need `pcm16_to_wav` adjustment.
 - **Markdown rendering is line-buffered.** Output appears at line granularity, not character granularity. Trade-off for streaming markdown without flicker.
 - **Realtime voice (Gemini Live API)** is not implemented. The chat REPL is text-only.
-- **Embeddings as a user feature, RAG, and user-defined function tools** are not yet implemented. Gemini server-side built-ins (`google_search`, `url_context`, `code_execution`) and a fixed set of local tools (`read_file`, `list_dir`, `fetch_url`, `exec`) are wired up via roles and the `.tools` REPL command.
+- **Embeddings as a user feature, RAG, and MCP integration** are not yet implemented. Tooling currently covers Gemini server-side built-ins (`google_search`, `url_context`, `code_execution`), a fixed set of local tools (`read_file`, `list_dir`, `fetch_url`, `exec`), and user-defined function tools loaded from `<config_dir>/tools/*.toml`.
 - **Streaming is disabled** while a local tool is active. The non-streaming function-call loop is simpler; streaming-with-tools is deferred.
 - **Lyria** worked in the smoke test but is preview and may change request shape; if it breaks you'll see the server error verbatim — adjust `generate_music` in `gemini/tts.rs` if needed.
 

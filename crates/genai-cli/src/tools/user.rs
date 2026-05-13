@@ -118,42 +118,22 @@ impl LocalTool for UserTool {
             .split_first()
             .ok_or_else(|| anyhow!("tool '{}' has empty command", self.name))?;
 
-        use std::process::{Command, Stdio};
-        use std::time::{Duration, Instant};
-
-        let mut cmd = Command::new(program);
-        cmd.args(rest)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let mut cmd = std::process::Command::new(program);
+        cmd.args(rest);
         prepend_path(&mut cmd, &self.bin_dir);
+        let captured = super::process::run_with_caps(
+            &mut cmd,
+            std::time::Duration::from_secs(self.timeout_secs),
+            MAX_OUTPUT_BYTES,
+        )
+        .with_context(|| format!("spawning '{}' for tool '{}'", program, self.name))?;
 
-        let mut child = cmd.spawn().with_context(|| {
-            format!("spawning '{}' for tool '{}'", program, self.name)
-        })?;
-
-        let deadline = Instant::now() + Duration::from_secs(self.timeout_secs);
-        let exit_status = loop {
-            if let Some(s) = child.try_wait()? {
-                break Some(s);
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        };
-
-        let timed_out = exit_status.is_none();
-        let exit_code = exit_status.and_then(|s| s.code());
-        let stdout = read_capped(child.stdout.take(), MAX_OUTPUT_BYTES);
-        let stderr = read_capped(child.stderr.take(), MAX_OUTPUT_BYTES);
         Ok(json!({
             "command": argv,
-            "exit_code": exit_code,
-            "timed_out": timed_out,
-            "stdout": stdout,
-            "stderr": stderr,
+            "exit_code": captured.exit_code,
+            "timed_out": captured.timed_out,
+            "stdout": captured.stdout,
+            "stderr": captured.stderr,
         }))
     }
 }
@@ -316,23 +296,6 @@ fn prepend_path(cmd: &mut std::process::Command, bin_dir: &Path) {
         combined.push(&existing);
     }
     cmd.env("PATH", combined);
-}
-
-fn read_capped<R: std::io::Read>(stream: Option<R>, cap: usize) -> String {
-    let Some(mut r) = stream else {
-        return String::new();
-    };
-    let mut buf = Vec::new();
-    let _ = std::io::Read::read_to_end(&mut r, &mut buf);
-    let truncated = buf.len() > cap;
-    if truncated {
-        buf.truncate(cap);
-    }
-    let mut out = String::from_utf8_lossy(&buf).into_owned();
-    if truncated {
-        out.push_str("\n…[truncated]");
-    }
-    out
 }
 
 fn shell_join(argv: &[String]) -> String {

@@ -289,58 +289,19 @@ impl LocalTool for Exec {
 
     fn run(&self, args: &Value) -> Result<Value> {
         let cmd = str_arg(args, "command")?.to_string();
-        use std::process::{Command, Stdio};
-        use std::time::{Duration, Instant};
-
-        let mut child = Command::new("sh")
-            .arg("-c")
-            .arg(&cmd)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-
-        let deadline = Instant::now() + Duration::from_secs(EXEC_TIMEOUT_SECS);
-        let exit_status = loop {
-            if let Some(status) = child.try_wait()? {
-                break Some(status);
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        };
-
-        let timed_out = exit_status.is_none();
-        let exit_code = exit_status.and_then(|s| s.code());
-        let stdout = read_capped(child.stdout.take(), EXEC_MAX_OUTPUT);
-        let stderr = read_capped(child.stderr.take(), EXEC_MAX_OUTPUT);
+        let captured = super::process::run_with_caps(
+            std::process::Command::new("sh").arg("-c").arg(&cmd),
+            std::time::Duration::from_secs(EXEC_TIMEOUT_SECS),
+            EXEC_MAX_OUTPUT,
+        )?;
         Ok(json!({
             "command": cmd,
-            "exit_code": exit_code,
-            "timed_out": timed_out,
-            "stdout": stdout,
-            "stderr": stderr,
+            "exit_code": captured.exit_code,
+            "timed_out": captured.timed_out,
+            "stdout": captured.stdout,
+            "stderr": captured.stderr,
         }))
     }
-}
-
-fn read_capped<R: std::io::Read>(stream: Option<R>, cap: usize) -> String {
-    let Some(mut r) = stream else {
-        return String::new();
-    };
-    let mut buf = Vec::new();
-    let _ = std::io::Read::read_to_end(&mut r, &mut buf);
-    let truncated = buf.len() > cap;
-    if truncated {
-        buf.truncate(cap);
-    }
-    let mut out = String::from_utf8_lossy(&buf).into_owned();
-    if truncated {
-        out.push_str("\n…[truncated]");
-    }
-    out
 }
 
 fn expand_tilde(s: &str) -> String {

@@ -15,11 +15,12 @@ use tokio::signal;
 use crate::config::Config;
 use crate::gemini::Client;
 use crate::gemini::chat::{ChatEvent, ChatRequest};
-use crate::gemini::image::{ImageRequest, InputImage};
-use crate::gemini::tts::{AudioOut, MusicRequest, TtsRequest, pcm16_to_wav};
+use crate::gemini::image::ImageRequest;
+use crate::gemini::tts::{MusicRequest, TtsRequest};
 use crate::gemini::types::{Content, GenerationConfig, Part};
 use crate::models::Registry;
 use crate::models::alias::{self, ResolvedModel};
+use crate::output;
 use crate::role::{self, Role};
 use crate::session::{ActiveSession, db::Database, messages_to_contents};
 use crate::tools;
@@ -283,7 +284,7 @@ async fn handle_command(state: &mut ReplState, cmd: DotCmd) -> Result<()> {
         DotCmd::Set { key, value } => apply_set(state, &key, &value)?,
         DotCmd::File(paths) => {
             for p in paths {
-                let pb = PathBuf::from(shellexpand(&p));
+                let pb = PathBuf::from(output::expand_path(&p));
                 if !pb.exists() {
                     eprintln!("warning: {} does not exist", pb.display());
                     continue;
@@ -678,12 +679,12 @@ async fn handle_image_cmd(state: &mut ReplState, args: ActionArgs) -> Result<()>
     let resolved = alias::resolve(&state.cfg, &model_id);
     crate::models::validate(&state.registry, &resolved.id, crate::models::CAP_IMAGE_OUT);
 
-    let output = match &args.output {
+    let out_path = match &args.output {
         Some(s) => s.clone(),
         None => prompt_user("Output path (or '-' for stdout)")?,
     };
 
-    let inputs = load_input_images(&args.files)?;
+    let inputs = output::load_input_images(&args.files)?;
 
     let req = ImageRequest {
         model: resolved.id,
@@ -694,7 +695,7 @@ async fn handle_image_cmd(state: &mut ReplState, args: ActionArgs) -> Result<()>
     };
 
     let images = state.client.generate_image(req).await?;
-    write_images(&output, &images)?;
+    output::write_images(&out_path, &images)?;
     Ok(())
 }
 
@@ -707,7 +708,7 @@ async fn handle_tts_cmd(state: &mut ReplState, args: ActionArgs) -> Result<()> {
     let resolved = alias::resolve(&state.cfg, &model_id);
     crate::models::validate(&state.registry, &resolved.id, crate::models::CAP_TTS);
 
-    let output = match &args.output {
+    let out_path = match &args.output {
         Some(s) => s.clone(),
         None => prompt_user("Output path (or '-' for stdout)")?,
     };
@@ -724,7 +725,7 @@ async fn handle_tts_cmd(state: &mut ReplState, args: ActionArgs) -> Result<()> {
             voice,
         })
         .await?;
-    write_audio(&output, &audio)?;
+    output::write_audio(&out_path, &audio)?;
     Ok(())
 }
 
@@ -742,7 +743,7 @@ async fn handle_music_cmd(state: &mut ReplState, args: ActionArgs) -> Result<()>
     let resolved = alias::resolve(&state.cfg, &model_id);
     crate::models::validate(&state.registry, &resolved.id, crate::models::CAP_MUSIC_OUT);
 
-    let output = match &args.output {
+    let out_path = match &args.output {
         Some(s) => s.clone(),
         None => prompt_user("Output path (or '-' for stdout)")?,
     };
@@ -754,49 +755,7 @@ async fn handle_music_cmd(state: &mut ReplState, args: ActionArgs) -> Result<()>
             prompt: args.prompt,
         })
         .await?;
-    write_audio(&output, &audio)?;
-    Ok(())
-}
-
-fn write_audio(output: &str, audio: &AudioOut) -> Result<()> {
-    let natural_ext = crate::gemini::tts::extension_for_mime(&audio.mime);
-    let (bytes, ext): (std::borrow::Cow<[u8]>, &str) =
-        if audio.mime.starts_with("audio/L16") || audio.mime.starts_with("audio/pcm") {
-            let sr = audio.sample_rate.unwrap_or(24000);
-            (
-                std::borrow::Cow::Owned(pcm16_to_wav(&audio.bytes, sr, 1)),
-                natural_ext,
-            )
-        } else {
-            (std::borrow::Cow::Borrowed(&audio.bytes), natural_ext)
-        };
-
-    if output == "-" {
-        let mut stdout = std::io::stdout().lock();
-        stdout.write_all(&bytes)?;
-        return Ok(());
-    }
-
-    let mut path = PathBuf::from(shellexpand(output));
-    let user_ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|s| s.to_lowercase());
-    if user_ext.is_none() {
-        path.set_extension(ext);
-    } else if let Some(u) = &user_ext
-        && u != ext && ext != "bin" {
-            eprintln!(
-                "warning: writing {} content to .{} file ({} would match the data)",
-                audio.mime, u, ext
-            );
-        }
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    std::fs::write(&path, &*bytes)?;
-    eprintln!("wrote {} ({})", path.display(), audio.mime);
+    output::write_audio(&out_path, &audio)?;
     Ok(())
 }
 
@@ -806,61 +765,6 @@ fn prompt_user(label: &str) -> Result<String> {
     let mut buf = String::new();
     std::io::stdin().read_line(&mut buf)?;
     Ok(buf.trim().to_string())
-}
-
-fn load_input_images(paths: &[String]) -> Result<Vec<InputImage>> {
-    let mut out = Vec::with_capacity(paths.len());
-    for p in paths {
-        let expanded = shellexpand(p);
-        let path = PathBuf::from(&expanded);
-        let att = crate::session::attachment::load(&path)?;
-        if !att.mime.starts_with("image/") {
-            eprintln!("warning: {} is {}, not an image", path.display(), att.mime);
-        }
-        out.push(InputImage {
-            mime: att.mime,
-            bytes: att.bytes,
-        });
-    }
-    Ok(out)
-}
-
-fn write_images(output: &str, images: &[crate::gemini::image::ImageOut]) -> Result<()> {
-    if output == "-" {
-        if images.len() > 1 {
-            anyhow::bail!("multiple images: cannot write all to stdout");
-        }
-        let mut stdout = std::io::stdout().lock();
-        stdout.write_all(&images[0].bytes)?;
-        return Ok(());
-    }
-    if images.len() == 1 {
-        let path = PathBuf::from(shellexpand(output));
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
-        std::fs::write(&path, &images[0].bytes)?;
-        eprintln!("wrote {}", path.display());
-        return Ok(());
-    }
-    let base = PathBuf::from(shellexpand(output));
-    let stem = base
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("image");
-    let ext_from_path = base.extension().and_then(|s| s.to_str()).map(String::from);
-    let dir = base.parent().unwrap_or_else(|| std::path::Path::new("."));
-    std::fs::create_dir_all(dir)?;
-    for (i, img) in images.iter().enumerate() {
-        let ext = ext_from_path
-            .clone()
-            .unwrap_or_else(|| crate::gemini::image::extension_for_mime(&img.mime).to_string());
-        let path = dir.join(format!("{stem}-{i}.{ext}"));
-        std::fs::write(&path, &img.bytes)?;
-        eprintln!("wrote {}", path.display());
-    }
-    Ok(())
 }
 
 fn apply_set(state: &mut ReplState, key: &str, value: &str) -> Result<()> {
@@ -1136,7 +1040,7 @@ async fn chat_turn_with_tools(
         generation_config: state.build_generation_config(),
         enabled_tools: state.active_tools.clone(),
     };
-    let mut ui = ReplToolUi;
+    let mut ui = tools::cli_ui::CliToolUi;
     let outcome = match tools::runner::run(&state.client, req, &mut ui).await {
         Ok(o) => o,
         Err(e) => {
@@ -1174,38 +1078,6 @@ async fn chat_turn_with_tools(
         &state.model.id,
     );
     Ok(())
-}
-
-struct ReplToolUi;
-
-impl tools::runner::ToolUi for ReplToolUi {
-    fn announce_call(&mut self, name: &str, summary: &str) {
-        eprintln!("[tool] {summary} ({name})");
-    }
-    fn announce_result(&mut self, _name: &str, ok: bool, preview: &str) {
-        let tag = if ok { "ok" } else { "err" };
-        eprintln!("[tool/{tag}] {preview}");
-    }
-    fn confirm(&mut self, _name: &str, summary: &str) -> tools::runner::Confirmation {
-        use std::io::{BufRead, Write};
-        let stdin = io::stdin();
-        if !stdin.is_terminal() {
-            eprintln!("[tool] {summary}: auto-denied (no TTY)");
-            return tools::runner::Confirmation::Deny;
-        }
-        eprint!("[tool] run `{summary}`? [y/N] ");
-        let _ = io::stderr().flush();
-        let mut line = String::new();
-        if stdin.lock().read_line(&mut line).is_err() {
-            return tools::runner::Confirmation::Deny;
-        }
-        let answer = line.trim().to_ascii_lowercase();
-        if matches!(answer.as_str(), "y" | "yes") {
-            tools::runner::Confirmation::Allow
-        } else {
-            tools::runner::Confirmation::Deny
-        }
-    }
 }
 
 enum StreamErr {
@@ -1280,10 +1152,3 @@ fn edit_via_editor() -> Result<Option<String>> {
     Ok(Some(text))
 }
 
-fn shellexpand(s: &str) -> String {
-    if let Some(rest) = s.strip_prefix("~/")
-        && let Ok(home) = std::env::var("HOME") {
-            return format!("{home}/{rest}");
-        }
-    s.to_string()
-}

@@ -1,4 +1,5 @@
 pub mod builtin;
+pub mod cli_ui;
 pub mod local;
 pub mod runner;
 pub mod user;

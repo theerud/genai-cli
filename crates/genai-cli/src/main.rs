@@ -3,6 +3,7 @@ mod config;
 mod gemini;
 mod init;
 mod models;
+mod output;
 mod repl;
 mod role;
 mod session;
@@ -16,10 +17,11 @@ use std::io::{self, IsTerminal, Write};
 use cli::{Cli, Command, ModelsCmd, SessionsCmd};
 use gemini::Client;
 use gemini::chat::{ChatEvent, ChatRequest};
-use gemini::image::{self as image_api, ImageRequest, InputImage};
-use gemini::tts::{AudioOut, MusicRequest, TtsRequest, pcm16_to_wav};
+use gemini::image::ImageRequest;
+use gemini::tts::{MusicRequest, TtsRequest};
 use gemini::types::{Content, GenerationConfig, Part};
 use models::alias::{self, ResolvedModel};
+use output::{expand_path, write_audio, write_images};
 use repl::render::{self};
 use session::{ActiveSession, messages_to_contents, open_db};
 use std::path::PathBuf;
@@ -180,47 +182,6 @@ async fn run_one_shot_music(
     write_audio(&output, &audio)
 }
 
-fn write_audio(output: &str, audio: &AudioOut) -> Result<()> {
-    let natural_ext = gemini::tts::extension_for_mime(&audio.mime);
-    let (bytes, ext): (std::borrow::Cow<[u8]>, &str) =
-        if audio.mime.starts_with("audio/L16") || audio.mime.starts_with("audio/pcm") {
-            let sr = audio.sample_rate.unwrap_or(24000);
-            (
-                std::borrow::Cow::Owned(pcm16_to_wav(&audio.bytes, sr, 1)),
-                natural_ext,
-            )
-        } else {
-            (std::borrow::Cow::Borrowed(audio.bytes.as_slice()), natural_ext)
-        };
-
-    if output == "-" {
-        let mut stdout = io::stdout().lock();
-        stdout.write_all(&bytes)?;
-        return Ok(());
-    }
-    let mut path = PathBuf::from(expand(output));
-    let user_ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|s| s.to_lowercase());
-    if user_ext.is_none() {
-        path.set_extension(ext);
-    } else if let Some(u) = &user_ext
-        && u != ext && ext != "bin" {
-            eprintln!(
-                "warning: writing {} content to .{} file ({} would match the data)",
-                audio.mime, u, ext
-            );
-        }
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
-    std::fs::write(&path, &*bytes)?;
-    eprintln!("wrote {} ({})", path.display(), audio.mime);
-    Ok(())
-}
-
 async fn run_one_shot_image(
     cfg: &config::Config,
     cli: &Cli,
@@ -235,15 +196,7 @@ async fn run_one_shot_image(
 
     let client = Client::new(api_key.to_string(), cfg.api_base().to_string())?;
 
-    let mut inputs = Vec::with_capacity(cli.file.len());
-    for f in &cli.file {
-        let p = std::path::PathBuf::from(expand(f));
-        let att = session::attachment::load(&p)?;
-        inputs.push(InputImage {
-            mime: att.mime,
-            bytes: att.bytes,
-        });
-    }
+    let inputs = output::load_input_images(&cli.file)?;
 
     let req = ImageRequest {
         model: resolved.id.clone(),
@@ -254,44 +207,6 @@ async fn run_one_shot_image(
     };
     let images = client.generate_image(req).await?;
     write_images(&output, &images)?;
-    Ok(())
-}
-
-fn write_images(output: &str, images: &[gemini::image::ImageOut]) -> Result<()> {
-    if output == "-" {
-        if images.len() > 1 {
-            anyhow::bail!("multiple images: cannot write all to stdout");
-        }
-        let mut stdout = io::stdout().lock();
-        stdout.write_all(&images[0].bytes)?;
-        return Ok(());
-    }
-    if images.len() == 1 {
-        let path = PathBuf::from(expand(output));
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
-        std::fs::write(&path, &images[0].bytes)?;
-        eprintln!("wrote {}", path.display());
-        return Ok(());
-    }
-    let base = PathBuf::from(expand(output));
-    let stem = base
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("image");
-    let ext_from_path = base.extension().and_then(|s| s.to_str()).map(String::from);
-    let dir = base.parent().unwrap_or_else(|| std::path::Path::new("."));
-    std::fs::create_dir_all(dir)?;
-    for (i, img) in images.iter().enumerate() {
-        let ext = ext_from_path
-            .clone()
-            .unwrap_or_else(|| image_api::extension_for_mime(&img.mime).to_string());
-        let path = dir.join(format!("{stem}-{i}.{ext}"));
-        std::fs::write(&path, &img.bytes)?;
-        eprintln!("wrote {}", path.display());
-    }
     Ok(())
 }
 
@@ -398,7 +313,7 @@ async fn run_one_shot_chat(
 
     let client = Client::new(api_key.to_string(), cfg.api_base().to_string())?;
 
-    let files: Vec<PathBuf> = cli.file.iter().map(|s| PathBuf::from(expand(s))).collect();
+    let files: Vec<PathBuf> = cli.file.iter().map(|s| PathBuf::from(expand_path(s))).collect();
     let (user_msg, attachments) = session::build_user_message(prompt, &files)?;
     let mut contents = session_history;
     contents.push(user_msg.clone());
@@ -526,7 +441,7 @@ async fn run_one_shot_with_tools(
         generation_config: build_generation_config(cfg, &resolved),
         enabled_tools,
     };
-    let mut ui = OneShotToolUi;
+    let mut ui = tools::cli_ui::CliToolUi;
     let outcome = tools::runner::run(client, req, &mut ui).await?;
 
     let stdout = io::stdout();
@@ -564,38 +479,6 @@ async fn run_one_shot_with_tools(
     }
     let _ = io::stderr().flush();
     Ok(())
-}
-
-struct OneShotToolUi;
-
-impl tools::runner::ToolUi for OneShotToolUi {
-    fn announce_call(&mut self, name: &str, summary: &str) {
-        eprintln!("[tool] {summary} ({name})");
-    }
-    fn announce_result(&mut self, _name: &str, ok: bool, preview: &str) {
-        let tag = if ok { "ok" } else { "err" };
-        eprintln!("[tool/{tag}] {preview}");
-    }
-    fn confirm(&mut self, _name: &str, summary: &str) -> tools::runner::Confirmation {
-        use std::io::{BufRead, Write};
-        let stdin = io::stdin();
-        if !stdin.is_terminal() {
-            eprintln!("[tool] {summary}: auto-denied (no TTY)");
-            return tools::runner::Confirmation::Deny;
-        }
-        eprint!("[tool] run `{summary}`? [y/N] ");
-        let _ = io::stderr().flush();
-        let mut line = String::new();
-        if stdin.lock().read_line(&mut line).is_err() {
-            return tools::runner::Confirmation::Deny;
-        }
-        let answer = line.trim().to_ascii_lowercase();
-        if matches!(answer.as_str(), "y" | "yes") {
-            tools::runner::Confirmation::Allow
-        } else {
-            tools::runner::Confirmation::Deny
-        }
-    }
 }
 
 fn build_generation_config(
@@ -688,10 +571,3 @@ fn cmd_gc() -> Result<()> {
     Ok(())
 }
 
-fn expand(s: &str) -> String {
-    if let Some(rest) = s.strip_prefix("~/")
-        && let Ok(home) = std::env::var("HOME") {
-            return format!("{home}/{rest}");
-        }
-    s.to_string()
-}

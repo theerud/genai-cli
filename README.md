@@ -284,7 +284,7 @@ genai models sync               # writes <data_dir>/models.toml
 genai models sync --dry-run     # just print the diff
 ```
 
-`models sync` fetches `models.list` from the Gemini API and overlays anything the bundled list doesn't already know about. Capabilities for new entries are guessed from the model id; for entries you care about long-term, copy the row into the bundled `data.toml` with proper pricing/capability labels.
+`models sync` fetches `models.list` from the Gemini API and writes a full snapshot to the overlay file — every model the API currently lists, with bundled fields (pricing, capability labels, thinking levels) merged in for known ids. New ids get sync-guessed capabilities from the model name; for entries you care about long-term, copy the row into the bundled `data.toml` with proper pricing.
 
 For custom model ids the API doesn't know about, define an alias — aliases pass any model id through to the API (unknown ids surface a warning, never a hard block).
 

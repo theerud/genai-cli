@@ -130,7 +130,7 @@ CLI flag > active role > session meta > user config > built-in default.
 
 ## Models registry
 
-Bundled `data.toml` (embedded with `include_str!`) holds the curated list: id, capabilities, context window, pricing, thinking levels, status. `genai models sync` refreshes a synced overlay at `<data_dir>/models.toml` from the live `models.list` API, covering entries the bundled list does not yet know about (preview models, new family releases). Bundled entries stay canonical because they carry curated fields the API does not return (pricing, capability labels, thinking levels).
+Bundled `data.toml` (embedded with `include_str!`) holds the curated list: id, capabilities, context window, pricing, thinking levels, status. `genai models sync` writes a full snapshot of the live `models.list` API to `<data_dir>/models.toml`. For ids the bundled list knows about, curated fields (pricing, capability labels, thinking levels) are merged in by id — the API doesn't return those. For ids that are bundled but absent from the live list, the entry stays served from the bundled registry (so deprecated-upstream models don't disappear from `models list` until you bump the bundled file).
 
 The synced overlay is fully managed by the sync command — hand-edits get clobbered on the next run. To add a custom model id the API does not know about, define an alias instead; aliases pass any model id through to the API (unknown ids get a warning, never a hard block).
 

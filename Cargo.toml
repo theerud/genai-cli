@@ -28,6 +28,7 @@ base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter"] }
 libc = "0.2"
+imagesize = "0.13"
 
 [profile.release]
 opt-level = "z"

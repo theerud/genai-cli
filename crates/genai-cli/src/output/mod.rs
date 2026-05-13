@@ -5,12 +5,48 @@
 pub mod image_preview;
 
 use anyhow::{Result, bail};
+use imagesize::ImageType;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::gemini::image::{self as image_api, ImageOut, InputImage};
 use crate::gemini::tts::{AudioOut, extension_for_mime, pcm16_to_wav};
 use crate::session::attachment;
+
+/// One-line `[W×H format, N KB]` description for any image blob. Returns
+/// just `[N KB]` when the format isn't recognized (header sniff failed) or
+/// `[empty]` for zero-length input. Cheap — `imagesize` only reads headers.
+pub fn describe_image(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return "[empty]".to_string();
+    }
+    let size_kb = bytes.len() as f64 / 1024.0;
+    match imagesize::blob_size(bytes) {
+        Ok(s) => {
+            let fmt = imagesize::image_type(bytes)
+                .map(format_label)
+                .unwrap_or("?");
+            format!("[{}×{} {fmt}, {size_kb:.1} KB]", s.width, s.height)
+        }
+        Err(_) => format!("[{size_kb:.1} KB]"),
+    }
+}
+
+fn format_label(t: ImageType) -> &'static str {
+    match t {
+        ImageType::Png => "png",
+        ImageType::Jpeg => "jpeg",
+        ImageType::Gif => "gif",
+        ImageType::Webp => "webp",
+        ImageType::Bmp => "bmp",
+        ImageType::Tiff => "tiff",
+        ImageType::Heif(_) => "heif",
+        ImageType::Ico => "ico",
+        ImageType::Psd => "psd",
+        ImageType::Jxl => "jxl",
+        _ => "?",
+    }
+}
 
 /// Expand a leading `~/` against `$HOME`. Anything else is passed through.
 pub fn expand_path(s: &str) -> String {
@@ -82,7 +118,7 @@ pub fn write_images(output: &str, images: &[ImageOut], preview: image_preview::P
         let path = PathBuf::from(expand_path(output));
         create_parent_dirs(&path)?;
         std::fs::write(&path, &images[0].bytes)?;
-        eprintln!("wrote {}", path.display());
+        eprintln!("wrote {} {}", path.display(), describe_image(&images[0].bytes));
         let _ = image_preview::show(preview, &images[0].bytes);
         return Ok(());
     }
@@ -100,7 +136,7 @@ pub fn write_images(output: &str, images: &[ImageOut], preview: image_preview::P
             .unwrap_or_else(|| image_api::extension_for_mime(&img.mime).to_string());
         let path = dir.join(format!("{stem}-{i}.{ext}"));
         std::fs::write(&path, &img.bytes)?;
-        eprintln!("wrote {}", path.display());
+        eprintln!("wrote {} {}", path.display(), describe_image(&img.bytes));
         let _ = image_preview::show(preview, &img.bytes);
     }
     Ok(())
@@ -132,4 +168,38 @@ fn create_parent_dirs(path: &Path) -> Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn describe_empty() {
+        assert_eq!(describe_image(&[]), "[empty]");
+    }
+
+    #[test]
+    fn describe_unknown_format_falls_back_to_size() {
+        let s = describe_image(b"not an image at all, just plain bytes");
+        assert!(s.starts_with("["), "got {s}");
+        assert!(s.ends_with("KB]"), "got {s}");
+        assert!(!s.contains('×'), "got {s}");
+    }
+
+    #[test]
+    fn describe_png_header() {
+        // Minimal PNG: signature + IHDR with width=42 height=24
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        buf.extend_from_slice(&13u32.to_be_bytes()); // chunk len
+        buf.extend_from_slice(b"IHDR");
+        buf.extend_from_slice(&42u32.to_be_bytes()); // width
+        buf.extend_from_slice(&24u32.to_be_bytes()); // height
+        buf.extend_from_slice(&[8, 2, 0, 0, 0]); // bit depth + filler
+        buf.extend_from_slice(&[0u8; 4]); // CRC
+        let s = describe_image(&buf);
+        assert!(s.contains("42×24"), "got {s}");
+        assert!(s.contains("png"), "got {s}");
+    }
 }

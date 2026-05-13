@@ -263,6 +263,7 @@ fn handle_preview(state: &ReplState, path: &str) -> Result<()> {
         eprintln!("(no image preview: terminal not supported or image_preview = off)");
         return Ok(());
     }
+    eprintln!("{} {}", expanded, output::describe_image(&bytes));
     // Kitty's f=100 transport only accepts PNG; iTerm2's OSC 1337 accepts
     // any format. Warn the user when we know rendering will silently fail.
     if matches!(proto, output::image_preview::Protocol::Kitty)

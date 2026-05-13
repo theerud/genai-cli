@@ -72,18 +72,6 @@ pub struct ThinkingConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GenerateContentRequest {
-    pub contents: Vec<Content>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system_instruction: Option<Content>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub generation_config: Option<GenerationConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<Tool>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Tool {
     #[serde(rename = "googleSearch")]
     GoogleSearch {},

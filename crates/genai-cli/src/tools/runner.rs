@@ -48,18 +48,19 @@ pub async fn run(
 ) -> Result<ToolLoopOutcome> {
     let tools = build_request_tools(&req.enabled_tools);
     let mut contents = req.contents;
-    let mut exchange: Vec<Content> = Vec::new();
+    // The caller-visible exchange is everything we append after this point.
+    let exchange_start = contents.len();
     let mut last_prompt;
     let mut last_output;
 
     for iter in 0..MAX_TOOL_ITERATIONS {
         debug!(iteration = iter, "tool loop iteration");
         let chat_req = ChatRequest {
-            model: req.model.clone(),
-            contents: contents.clone(),
-            system_instruction: req.system_instruction.clone(),
-            generation_config: req.generation_config.clone(),
-            tools: tools.clone(),
+            model: &req.model,
+            contents: &contents,
+            system_instruction: req.system_instruction.as_deref(),
+            generation_config: req.generation_config.as_ref(),
+            tools: tools.as_deref(),
         };
         let resp = client.generate_content(chat_req).await?;
         last_prompt = resp.prompt_tokens;
@@ -77,13 +78,10 @@ pub async fn run(
             })
             .collect();
 
-        // Persist this model turn into both history (for the next API call)
-        // and the exchange (for caller persistence).
-        contents.push(model_content.clone());
-        exchange.push(model_content.clone());
-
         if calls.is_empty() {
             let text = collect_text(&model_content);
+            contents.push(model_content);
+            let exchange = contents.split_off(exchange_start);
             return Ok(ToolLoopOutcome {
                 exchange,
                 final_text: text,
@@ -91,6 +89,7 @@ pub async fn run(
                 output_tokens: last_output,
             });
         }
+        contents.push(model_content);
 
         // Execute each requested function call, in order, and append a single
         // user message containing all functionResponse parts. Gemini accepts
@@ -140,12 +139,10 @@ pub async fn run(
             });
         }
 
-        let tool_content = Content {
+        contents.push(Content {
             role: Some("user".to_string()),
             parts: response_parts,
-        };
-        contents.push(tool_content.clone());
-        exchange.push(tool_content);
+        });
     }
 
     Err(anyhow!(

@@ -25,12 +25,14 @@ pub(super) async fn chat_turn(state: &mut ReplState, user_text: String) -> Resul
         return chat_turn_with_tools(state, contents, user_msg, attachments).await;
     }
 
+    let gen_cfg = state.build_generation_config();
+    let tools_list = tools::build_request_tools(&state.active_tools);
     let req = ChatRequest {
-        model: state.model.id.clone(),
-        contents,
-        system_instruction: state.system_prompt.clone(),
-        generation_config: state.build_generation_config(),
-        tools: tools::build_request_tools(&state.active_tools),
+        model: &state.model.id,
+        contents: &contents,
+        system_instruction: state.system_prompt.as_deref(),
+        generation_config: gen_cfg.as_ref(),
+        tools: tools_list.as_deref(),
     };
 
     let stream = state.client.stream_chat(req).await?;

@@ -337,12 +337,14 @@ async fn run_one_shot_chat(
         .await;
     }
 
+    let gen_cfg = build_generation_config(cfg, &resolved);
+    let tools_list = tools::build_request_tools(&enabled_tools);
     let req = ChatRequest {
-        model: resolved.id.clone(),
-        contents,
-        system_instruction: system_prompt,
-        generation_config: build_generation_config(cfg, &resolved),
-        tools: tools::build_request_tools(&enabled_tools),
+        model: &resolved.id,
+        contents: &contents,
+        system_instruction: system_prompt.as_deref(),
+        generation_config: gen_cfg.as_ref(),
+        tools: tools_list.as_deref(),
     };
 
     let mut stream = client.stream_chat(req).await?;

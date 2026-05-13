@@ -5,16 +5,42 @@ use tracing::{debug, trace};
 
 use super::Client;
 use super::types::{
-    ApiErrorEnvelope, Content, FinishReason, GenerateContentRequest, GenerateContentResponse,
-    GenerationConfig, Part, Tool,
+    ApiErrorEnvelope, Content, FinishReason, GenerateContentResponse, GenerationConfig, Part,
+    Tool,
 };
 
-pub struct ChatRequest {
-    pub model: String,
-    pub contents: Vec<Content>,
-    pub system_instruction: Option<String>,
-    pub generation_config: Option<GenerationConfig>,
-    pub tools: Option<Vec<Tool>>,
+/// Borrowed request body. Constructed locally per HTTP call; never exposed.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GenerateContentBody<'a> {
+    contents: &'a [Content],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system_instruction: Option<&'a Content>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generation_config: Option<&'a GenerationConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<&'a [Tool]>,
+}
+
+/// Wrap a system-prompt string into a single-part Content so it can be
+/// referenced by the borrowed body. The returned Option owns the Content;
+/// callers feed `.as_ref()` into the body.
+fn system_instruction_content(text: Option<&str>) -> Option<Content> {
+    text.map(|t| Content {
+        role: None,
+        parts: vec![Part::Text { text: t.to_string() }],
+    })
+}
+
+/// Borrowed view of a chat request. Everything is by reference so the
+/// tool-call loop can reuse the same history Vec across iterations
+/// without per-iteration clones.
+pub struct ChatRequest<'a> {
+    pub model: &'a str,
+    pub contents: &'a [Content],
+    pub system_instruction: Option<&'a str>,
+    pub generation_config: Option<&'a GenerationConfig>,
+    pub tools: Option<&'a [Tool]>,
 }
 
 pub enum ChatEvent {
@@ -41,18 +67,16 @@ pub struct ChatResponse {
 }
 
 impl Client {
-    pub async fn generate_content(&self, req: ChatRequest) -> Result<ChatResponse> {
+    pub async fn generate_content(&self, req: ChatRequest<'_>) -> Result<ChatResponse> {
         let url = format!(
             "{}/v1beta/models/{}:generateContent",
             self.base, req.model
         );
         debug!(model = %req.model, msgs = req.contents.len(), "generate_content");
-        let body = GenerateContentRequest {
+        let system_instruction = system_instruction_content(req.system_instruction);
+        let body = GenerateContentBody {
             contents: req.contents,
-            system_instruction: req.system_instruction.map(|t| Content {
-                role: None,
-                parts: vec![Part::Text { text: t }],
-            }),
+            system_instruction: system_instruction.as_ref(),
             generation_config: req.generation_config,
             tools: req.tools,
         };
@@ -85,19 +109,17 @@ impl Client {
         })
     }
 
-    pub async fn stream_chat(&self, req: ChatRequest) -> Result<ChatStream> {
+    pub async fn stream_chat(&self, req: ChatRequest<'_>) -> Result<ChatStream> {
         let url = format!(
             "{}/v1beta/models/{}:streamGenerateContent?alt=sse",
             self.base, req.model
         );
         debug!(model = %req.model, msgs = req.contents.len(), "stream_chat");
 
-        let body = GenerateContentRequest {
+        let system_instruction = system_instruction_content(req.system_instruction);
+        let body = GenerateContentBody {
             contents: req.contents,
-            system_instruction: req.system_instruction.map(|t| Content {
-                role: None,
-                parts: vec![Part::Text { text: t }],
-            }),
+            system_instruction: system_instruction.as_ref(),
             generation_config: req.generation_config,
             tools: req.tools,
         };

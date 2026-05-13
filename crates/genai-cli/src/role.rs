@@ -11,7 +11,6 @@ pub struct Role {
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
     pub thinking_level: Option<String>,
-    pub output_dir: Option<String>,
     #[serde(default)]
     pub tools: Vec<String>,
 }

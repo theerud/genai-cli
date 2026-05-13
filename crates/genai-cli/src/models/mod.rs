@@ -83,7 +83,11 @@ impl Registry {
         self.models.iter().filter(move |m| m.has(cap))
     }
 
-    /// Return up to 3 ids closest to `query` by Levenshtein distance.
+    /// Return up to 3 ids closest to `query` by Levenshtein distance, filtered
+    /// to "plausibly the same name with a typo." The cap `len/2 + 4` lets a
+    /// short query tolerate a few edits and a long one tolerate roughly half
+    /// its length — both common typo profiles, neither so loose that unrelated
+    /// model ids creep in.
     pub fn suggest(&self, query: &str) -> Vec<String> {
         let mut scored: Vec<(usize, &str)> = self
             .models

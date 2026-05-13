@@ -506,22 +506,50 @@ fn maybe_resolve_ephemeral_before_transition(state: &mut ReplState) -> Result<()
     }
 }
 
+/// Commit history rows into a new session, preserving turn boundaries.
+/// A turn starts at each fresh user-text message and runs until (exclusive)
+/// the next one — so a function-calling exchange (user text → model call →
+/// user functionResponse → … → model text) gets committed as a single turn
+/// instead of being split apart.
 fn inherit_history_into_session(
     db: &mut Database,
     session_id: i64,
     history: &[Content],
     model_id: &str,
 ) -> Result<()> {
-    let mut i = 0;
-    while i + 1 < history.len() {
-        let u = &history[i];
-        let a = &history[i + 1];
-        if u.role.as_deref() == Some("user") && a.role.as_deref() == Some("model") {
-            db.commit_turn(session_id, u, a, Some(model_id), &[])?;
+    let mut start: Option<usize> = None;
+    let commit = |db: &mut Database, slice: &[Content]| -> Result<()> {
+        if slice.len() < 2 {
+            return Ok(()); // half-finished turn; skip
         }
-        i += 2;
+        db.commit_exchange(session_id, &slice[0], &slice[1..], Some(model_id), &[])
+    };
+    for (i, c) in history.iter().enumerate() {
+        if is_fresh_user_message(c)
+            && let Some(s) = start.replace(i)
+        {
+            commit(db, &history[s..i])?;
+        }
+    }
+    if let Some(s) = start {
+        commit(db, &history[s..])?;
     }
     Ok(())
+}
+
+fn is_fresh_user_message(c: &Content) -> bool {
+    if c.role.as_deref() != Some("user") {
+        return false;
+    }
+    let mut has_text = false;
+    for p in &c.parts {
+        match p {
+            Part::Text { .. } => has_text = true,
+            Part::FunctionResponse { .. } => return false,
+            _ => {}
+        }
+    }
+    has_text
 }
 
 fn prompt_yes_no(question: &str, default_yes: bool) -> Result<bool> {

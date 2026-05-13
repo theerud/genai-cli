@@ -229,6 +229,28 @@ Available tools:
 
 When any local tool is active, streaming output is disabled and the model is allowed to call tools up to 8 times before producing a final answer. Each call prints a `[tool] …` line on stderr.
 
+### User-defined tools
+
+Drop a TOML file in `<config_dir>/tools/<name>.toml`:
+
+```toml
+description = "Show recent git commits as 'hash subject' lines."
+command = ["git", "-C", "{{path}}", "log", "--oneline", "-n", "{{limit}}"]
+timeout_secs = 10
+# confirmation = true     # prompt y/N before each call
+
+[args.path]
+type = "string"
+description = "Path to the working tree."
+required = true
+
+[args.limit]
+type = "integer"
+default = 10
+```
+
+Argument types: `string`, `integer`, `number`, `boolean`. `{{name}}` placeholders in `command` are replaced with the validated arg values. Tools can't shadow built-in names. Scripts dropped in `<config_dir>/tools/bin/` are reachable by user tools — that dir is prepended to `PATH` only for user-tool execution.
+
 ## Sessions & storage
 
 Everything except attachments lives in a single SQLite DB:

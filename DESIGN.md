@@ -11,8 +11,8 @@ A single-binary Rust CLI for day-to-day use of Google's Gemini API: REPL chat, o
 
 ## Scope (v1)
 
-In: chat REPL + one-off, sessions (named + ephemeral), roles, aliases, image gen, TTS, music gen, file attachments (input + output), markdown/code rendering, Gemini server-side built-in tools (`google_search`, `url_context`, `code_execution`), client-side local tools (`read_file`, `list_dir`, `fetch_url`, `exec`), per-session token/cost tracking, `genai init` first-run wizard, `genai gc` for orphan blob cleanup.
-Out (deferred): realtime voice (Live API), embeddings as a user feature, user-defined function tools, RAG, MCP, streaming with tool calls.
+In: chat REPL + one-off, sessions (named + ephemeral), roles, aliases, image gen, TTS, music gen, file attachments (input + output), markdown/code rendering, Gemini server-side built-in tools (`google_search`, `url_context`, `code_execution`), built-in local tools (`read_file`, `list_dir`, `fetch_url`, `exec`), user-defined local tools (`<config_dir>/tools/*.toml`), per-session token/cost tracking, `genai init` first-run wizard, `genai gc` for orphan blob cleanup.
+Out (deferred): realtime voice (Live API), embeddings as a user feature, RAG, MCP, streaming with tool calls.
 
 Image default: prefer `gemini-2.5-flash-image` (nano-banana) over Imagen.
 
@@ -81,7 +81,32 @@ When any local tool is enabled, the chat path switches from streaming to a non-s
 3. Stop when the model returns a text-only response, or bail at `MAX_TOOL_ITERATIONS` (8).
 4. Persist the full exchange (user → model+tool back-and-forth → final text) atomically in a single transaction.
 
-User-defined function tools (`~/.config/genai/tools/*.toml`) and MCP are explicitly out of scope for v0.
+#### User-defined local tools
+
+Drop a TOML file in `<config_dir>/tools/<name>.toml`. The filename stem is the tool name; it must not shadow a built-in (`read_file`, `list_dir`, `fetch_url`, `exec`) — shadows are rejected with a warning at load time.
+
+```toml
+description = "Show recent git commits as 'hash subject' lines."
+command = ["git", "-C", "{{path}}", "log", "--oneline", "-n", "{{limit}}"]
+timeout_secs = 10
+confirmation = false  # set true to prompt y/N before each call
+
+[args.path]
+type = "string"           # string | integer | number | boolean
+description = "Path to the working tree."
+required = true
+
+[args.limit]
+type = "integer"
+default = 10
+```
+
+- Execution is **argv-only** (no `sh -c`); `command` is a `Vec<String>` with `{{name}}` placeholders substituted from validated args.
+- Type coercion is lenient (e.g. `"20"` for an integer is accepted).
+- `<config_dir>/tools/bin/` is prepended to `PATH` when executing user-defined tools, letting helper scripts live alongside their `.toml`. Built-in tools keep the caller's PATH untouched.
+- The registry is built once per process: edits require restart.
+
+MCP is explicitly out of scope for v0.
 
 ## Aliases
 

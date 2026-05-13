@@ -63,6 +63,9 @@ pub struct ModelEmbed {
 pub struct OutputPaths {
     pub image_dir: Option<String>,
     pub audio_dir: Option<String>,
+    /// "auto" (default), "kitty", "iterm2", or "off". Controls in-terminal
+    /// image preview after `.image` / one-off image generation.
+    pub image_preview: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

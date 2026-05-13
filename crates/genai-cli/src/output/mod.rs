@@ -2,6 +2,8 @@
 //! the REPL command handlers. Anything that writes audio, image, or
 //! arbitrary-blob output to disk lives here so the two callers stay in sync.
 
+pub mod image_preview;
+
 use anyhow::{Result, bail};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -65,8 +67,9 @@ pub fn write_audio(output: &str, audio: &AudioOut) -> Result<()> {
 }
 
 /// Write one or more images. With multiple images, `output` is treated as a
-/// stem and we append `-<n>` plus a per-image extension.
-pub fn write_images(output: &str, images: &[ImageOut]) -> Result<()> {
+/// stem and we append `-<n>` plus a per-image extension. After writing, an
+/// in-terminal preview is attempted (silent no-op on unsupported terminals).
+pub fn write_images(output: &str, images: &[ImageOut], preview: image_preview::Preference) -> Result<()> {
     if output == "-" {
         if images.len() > 1 {
             bail!("multiple images: cannot write all to stdout");
@@ -80,6 +83,7 @@ pub fn write_images(output: &str, images: &[ImageOut]) -> Result<()> {
         create_parent_dirs(&path)?;
         std::fs::write(&path, &images[0].bytes)?;
         eprintln!("wrote {}", path.display());
+        let _ = image_preview::show(preview, &images[0].bytes);
         return Ok(());
     }
     let base = PathBuf::from(expand_path(output));
@@ -97,6 +101,7 @@ pub fn write_images(output: &str, images: &[ImageOut]) -> Result<()> {
         let path = dir.join(format!("{stem}-{i}.{ext}"));
         std::fs::write(&path, &img.bytes)?;
         eprintln!("wrote {}", path.display());
+        let _ = image_preview::show(preview, &img.bytes);
     }
     Ok(())
 }

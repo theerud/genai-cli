@@ -516,6 +516,7 @@ dependencies = [
  "clap",
  "directories",
  "futures-util",
+ "libc",
  "reqwest",
  "rusqlite",
  "rustyline",

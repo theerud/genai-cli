@@ -51,7 +51,9 @@ pub(super) async fn handle_image_cmd(state: &mut ReplState, args: ActionArgs) ->
     };
 
     let images = state.client.generate_image(req).await?;
-    output::write_images(&out_path, &images)?;
+    let preview =
+        output::image_preview::Preference::from_config(state.cfg.output.image_preview.as_deref());
+    output::write_images(&out_path, &images, preview)?;
     Ok(())
 }
 

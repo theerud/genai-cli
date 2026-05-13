@@ -162,6 +162,14 @@ default = "gemini-embedding-2"
 markdown = true            # render ANSI-colored markdown to a TTY
 color = true               # syntax-highlight fenced code blocks
 
+# In-terminal image preview after `.image` / image generation. Default
+# "auto" probes the terminal; "iterm2" or "kitty" force a protocol;
+# "off" disables. Force a protocol if your terminal advertises Kitty
+# support but rendering doesn't actually work for you.
+#
+# [output]
+# image_preview = "auto"
+
 # Aliases are named bundles of (model, per-model params). Usable anywhere a
 # model id is expected: `genai -m pro-high "…"`, `.model pro-high` in the REPL,
 # etc. The thinking_level maps to one of: off, low, medium, high, dynamic.

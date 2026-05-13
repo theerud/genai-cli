@@ -259,6 +259,33 @@ default = 10
 
 Argument types: `string`, `integer`, `number`, `boolean`. `{{name}}` placeholders in `command` are replaced with the validated arg values. Tools can't shadow built-in names. Scripts dropped in `<config_dir>/tools/bin/` are reachable by user tools — that dir is prepended to `PATH` only for user-tool execution.
 
+## In-terminal image preview
+
+When a supported terminal is detected, generated images are previewed inline
+right after they're saved. Supported protocols:
+
+- **iTerm2 inline images** — iTerm2, WezTerm
+- **Kitty graphics** — Kitty, Ghostty, WezTerm, foot
+
+Detection is a live query/response handshake against `/dev/tty`, so it works
+through ssh and tmux (tmux requires `set -g allow-passthrough on`). Failure
+mode is silent — if the terminal doesn't answer the probe, the image is
+saved and that's it.
+
+Override the auto-detection in `config.toml`:
+
+```toml
+[output]
+image_preview = "auto"     # default; probe and pick
+# image_preview = "iterm2" # force
+# image_preview = "kitty"  # force
+# image_preview = "off"    # never preview
+```
+
+Force a protocol if you know your terminal (saves the ~400 ms probe) or if
+auto-detection picks the wrong one — some terminals advertise Kitty support
+without actually rendering correctly.
+
 ## Sessions & storage
 
 Everything except attachments lives in a single SQLite DB:

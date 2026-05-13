@@ -197,7 +197,7 @@ pub async fn run(mut state: ReplState) -> Result<()> {
                 break;
             },
             Err(e) => {
-                eprintln!("readline: {e}");
+                eprintln!("error: readline: {e}");
                 break;
             }
         }

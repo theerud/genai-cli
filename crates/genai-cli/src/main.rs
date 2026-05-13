@@ -25,7 +25,14 @@ use session::{ActiveSession, messages_to_contents, open_db};
 use std::path::PathBuf;
 
 #[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<()> {
+async fn main() {
+    if let Err(err) = real_main().await {
+        print_error_chain(&err);
+        std::process::exit(1);
+    }
+}
+
+async fn real_main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = config::load()?;
 
@@ -47,6 +54,16 @@ async fn main() -> Result<()> {
     match cli.prompt_text() {
         Some(prompt) => run_one_shot(&cfg, &cli, prompt).await,
         None => run_repl(cfg, cli.session.as_deref(), cli.role.as_deref()).await,
+    }
+}
+
+/// Print an anyhow error and its cause chain in a stable format suitable for
+/// the CLI's stderr. Top line is `error: <message>`; each subsequent cause is
+/// indented under `caused by:`.
+fn print_error_chain(err: &anyhow::Error) {
+    eprintln!("error: {err}");
+    for cause in err.chain().skip(1) {
+        eprintln!("  caused by: {cause}");
     }
 }
 

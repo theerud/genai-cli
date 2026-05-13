@@ -1,12 +1,16 @@
 pub mod builtin;
 pub mod local;
 pub mod runner;
+pub mod user;
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use crate::gemini::types::Tool;
 use crate::models::Registry;
 
 pub use builtin::{builtin_names, parse_builtin, validate_enabled_tool};
-pub use local::{LocalTool, local_names, lookup_local};
+pub use local::LocalTool;
 
 /// Categorization of a named tool. `Unknown` is returned for names that match
 /// neither the Gemini built-ins nor any registered local tool.
@@ -26,14 +30,10 @@ pub fn classify(name: &str) -> ToolKind {
     ToolKind::Unknown
 }
 
-/// Returns true if any of the enabled tools is a local (client-side) tool.
 pub fn has_local(names: &[String]) -> bool {
     names.iter().any(|n| lookup_local(n).is_some())
 }
 
-/// Build the `tools` field of a request from the enabled-name list.
-/// Combines server-side built-ins and a `FunctionDeclarations` aggregate for
-/// any local tools.
 pub fn build_request_tools(names: &[String]) -> Option<Vec<Tool>> {
     let mut out: Vec<Tool> = Vec::new();
     let mut decls = Vec::new();
@@ -50,8 +50,6 @@ pub fn build_request_tools(names: &[String]) -> Option<Vec<Tool>> {
     if out.is_empty() { None } else { Some(out) }
 }
 
-/// Validate every enabled tool against the model and known tool names.
-/// Emits warnings only — never blocks.
 pub fn validate_all(registry: &Registry, model_id: &str, names: &[String]) {
     for n in names {
         match classify(n) {
@@ -60,4 +58,44 @@ pub fn validate_all(registry: &Registry, model_id: &str, names: &[String]) {
             ToolKind::Unknown => eprintln!("warning: unknown tool '{n}'"),
         }
     }
+}
+
+// ---------- Local-tool registry ----------
+
+static LOCAL_REGISTRY: OnceLock<HashMap<String, Box<dyn LocalTool>>> = OnceLock::new();
+
+fn registry() -> &'static HashMap<String, Box<dyn LocalTool>> {
+    LOCAL_REGISTRY.get_or_init(build_registry)
+}
+
+fn build_registry() -> HashMap<String, Box<dyn LocalTool>> {
+    let mut map: HashMap<String, Box<dyn LocalTool>> = HashMap::new();
+    for tool in local::builtin_locals() {
+        map.insert(tool.name().to_string(), tool);
+    }
+    if let Ok(paths) = crate::config::paths() {
+        let tools_dir = paths.config_dir.join("tools");
+        let bin_dir = tools_dir.join("bin");
+        for tool in user::load_dir(&tools_dir, bin_dir) {
+            let name = tool.name().to_string();
+            if map.contains_key(&name) {
+                eprintln!(
+                    "warning: user tool '{name}' shadows a built-in name; ignoring user definition"
+                );
+                continue;
+            }
+            map.insert(name, Box::new(tool));
+        }
+    }
+    map
+}
+
+pub fn lookup_local(name: &str) -> Option<&'static dyn LocalTool> {
+    registry().get(name).map(|b| &**b)
+}
+
+pub fn local_names() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = registry().keys().map(|s| s.as_str()).collect();
+    names.sort();
+    names
 }

@@ -891,7 +891,7 @@ fn handle_tools_cmd(state: &mut ReplState, arg: Option<String>) -> Result<()> {
             }
             eprintln!("Local (client-side):");
             for name in tools::local_names() {
-                let marker = if state.active_tools.iter().any(|t| t == *name) {
+                let marker = if state.active_tools.iter().any(|t| t == name) {
                     "*"
                 } else {
                     " "

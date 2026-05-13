@@ -8,8 +8,6 @@ pub const TOOL_LIST_DIR: &str = "list_dir";
 pub const TOOL_FETCH_URL: &str = "fetch_url";
 pub const TOOL_EXEC: &str = "exec";
 
-pub const LOCAL_TOOL_NAMES: &[&str] = &[TOOL_READ_FILE, TOOL_LIST_DIR, TOOL_FETCH_URL, TOOL_EXEC];
-
 const MAX_READ_BYTES: usize = 256 * 1024;
 const MAX_LIST_ENTRIES: usize = 200;
 const MAX_FETCH_BYTES: usize = 1024 * 1024;
@@ -19,32 +17,27 @@ const EXEC_MAX_OUTPUT: usize = 64 * 1024;
 
 /// A client-side tool that Gemini can call via function calling.
 pub trait LocalTool: Sync + Send {
+    fn name(&self) -> &str;
     fn declaration(&self) -> FunctionDeclaration;
     /// True when the tool may have side effects and should be gated by a
     /// user-facing confirmation prompt before each call.
     fn requires_confirmation(&self) -> bool {
         false
     }
-    /// Run synchronously. Async would be cleaner for fetch_url, but keeping
-    /// the trait object-safe and synchronous is enough for v0. The fetch
-    /// implementation runs the request on a fresh blocking client.
     fn run(&self, args: &Value) -> Result<Value>;
     /// One-line, user-facing summary of an invocation (rendered in the REPL).
     fn describe_call(&self, args: &Value) -> String;
 }
 
-pub fn local_names() -> &'static [&'static str] {
-    LOCAL_TOOL_NAMES
-}
-
-pub fn lookup_local(name: &str) -> Option<&'static dyn LocalTool> {
-    match name {
-        TOOL_READ_FILE => Some(&ReadFile),
-        TOOL_LIST_DIR => Some(&ListDir),
-        TOOL_FETCH_URL => Some(&FetchUrl),
-        TOOL_EXEC => Some(&Exec),
-        _ => None,
-    }
+/// All built-in client-side tools as boxed trait objects. The registry layer
+/// merges these with any user-defined tools discovered on disk.
+pub fn builtin_locals() -> Vec<Box<dyn LocalTool>> {
+    vec![
+        Box::new(ReadFile),
+        Box::new(ListDir),
+        Box::new(FetchUrl),
+        Box::new(Exec),
+    ]
 }
 
 fn str_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
@@ -59,6 +52,9 @@ fn str_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
 struct ReadFile;
 
 impl LocalTool for ReadFile {
+    fn name(&self) -> &str {
+        TOOL_READ_FILE
+    }
 
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
@@ -112,6 +108,9 @@ impl LocalTool for ReadFile {
 struct ListDir;
 
 impl LocalTool for ListDir {
+    fn name(&self) -> &str {
+        TOOL_LIST_DIR
+    }
 
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
@@ -176,6 +175,9 @@ impl LocalTool for ListDir {
 struct FetchUrl;
 
 impl LocalTool for FetchUrl {
+    fn name(&self) -> &str {
+        TOOL_FETCH_URL
+    }
 
     fn declaration(&self) -> FunctionDeclaration {
         FunctionDeclaration {
@@ -249,6 +251,9 @@ impl LocalTool for FetchUrl {
 struct Exec;
 
 impl LocalTool for Exec {
+    fn name(&self) -> &str {
+        TOOL_EXEC
+    }
 
     fn requires_confirmation(&self) -> bool {
         true

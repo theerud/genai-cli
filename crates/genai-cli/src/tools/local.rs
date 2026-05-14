@@ -27,6 +27,13 @@ pub trait LocalTool: Sync + Send {
     fn run(&self, args: &Value) -> Result<Value>;
     /// One-line, user-facing summary of an invocation (rendered in the REPL).
     fn describe_call(&self, args: &Value) -> String;
+
+    /// Pre-process args before policy evaluation: canonicalize paths,
+    /// extract hosts from URLs, etc. The returned value is what the
+    /// rule matcher sees. Default: pass through unchanged.
+    fn normalize_for_policy(&self, args: &Value) -> Value {
+        args.clone()
+    }
 }
 
 /// All built-in client-side tools as boxed trait objects. The registry layer
@@ -85,7 +92,9 @@ impl LocalTool for ReadFile {
 
     fn run(&self, args: &Value) -> Result<Value> {
         let raw = str_arg(args, "path")?;
-        let path = super::safety::check_read_path(raw)?;
+        let expanded = crate::output::expand_path(raw);
+        let path = std::fs::canonicalize(&expanded)
+            .map_err(|e| anyhow::anyhow!("cannot resolve {expanded}: {e}"))?;
         let meta = std::fs::metadata(&path)?;
         if !meta.is_file() {
             bail!("not a regular file: {}", path.display());
@@ -101,6 +110,10 @@ impl LocalTool for ReadFile {
             "truncated": truncated,
             "content": text,
         }))
+    }
+
+    fn normalize_for_policy(&self, args: &Value) -> Value {
+        canonicalize_path_arg(args, "path")
     }
 }
 
@@ -140,7 +153,9 @@ impl LocalTool for ListDir {
 
     fn run(&self, args: &Value) -> Result<Value> {
         let raw = str_arg(args, "path")?;
-        let path = super::safety::check_read_path(raw)?;
+        let expanded = crate::output::expand_path(raw);
+        let path = std::fs::canonicalize(&expanded)
+            .map_err(|e| anyhow::anyhow!("cannot resolve {expanded}: {e}"))?;
         let meta = std::fs::metadata(&path)?;
         if !meta.is_dir() {
             bail!("not a directory: {}", path.display());
@@ -169,6 +184,10 @@ impl LocalTool for ListDir {
             "entries": entries,
             "truncated": truncated,
         }))
+    }
+
+    fn normalize_for_policy(&self, args: &Value) -> Value {
+        canonicalize_path_arg(args, "path")
     }
 }
 
@@ -212,7 +231,6 @@ impl LocalTool for FetchUrl {
         if !url.starts_with("http://") && !url.starts_with("https://") {
             bail!("only http(s) URLs allowed");
         }
-        super::safety::check_fetch_url(&url)?;
         // The trait is sync but we run inside a multi-thread tokio runtime;
         // block in place and reuse the async reqwest client.
         let handle = tokio::runtime::Handle::current();
@@ -305,5 +323,22 @@ impl LocalTool for Exec {
             "stderr": captured.stderr,
         }))
     }
+}
+
+/// Replace a path-valued arg with its canonicalized absolute form. Used
+/// by tools that take path args (`read_file`, `list_dir`) so the policy
+/// matcher sees the resolved target — a symlink can't bypass a deny rule.
+/// If the path doesn't exist yet (rare for read tools), passes through.
+fn canonicalize_path_arg(args: &Value, key: &str) -> Value {
+    let mut out = args.clone();
+    if let Some(p) = out.get(key).and_then(Value::as_str) {
+        let expanded = crate::output::expand_path(p);
+        if let Ok(c) = std::fs::canonicalize(&expanded) {
+            out[key] = json!(c.display().to_string());
+        } else {
+            out[key] = json!(expanded);
+        }
+    }
+    out
 }
 

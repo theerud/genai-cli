@@ -181,6 +181,53 @@ color = true               # syntax-highlight fenced code blocks
 # [aliases.fast]
 # model = "gemini-2.5-flash-lite"
 # temperature = 0.3
+
+# ---------------------------------------------------------------------
+# Tool-call policy. Rules are matched in descending `priority` (ties
+# broken by config order); the first match wins. If no rule matches, the
+# tool's own confirmation default decides.
+#
+# Pattern syntax: `*` matches any run of characters (including empty).
+# No regex, no `?`. Patterns anchor at both ends — to match anywhere,
+# surround with `*`.
+#
+# Below are the sensible defaults this wizard wrote out. Edit, add, or
+# remove freely.
+# ---------------------------------------------------------------------
+
+# Refuse anything that touches credential files. Symlinks are resolved
+# before matching, so `ln -s ~/.ssh /tmp/x` can't bypass.
+[[security.rule]]
+tool = ["read_file", "list_dir"]
+arg = "path"
+patterns = ["*/.ssh/*", "*/.aws/*", "*/.gnupg/*", "*/.netrc"]
+decision = "deny"
+priority = 100
+
+# Refuse fetching local services and cloud-metadata endpoints. Add
+# specific hosts to an allow rule with higher priority if you trust them.
+[[security.rule]]
+tool = "fetch_url"
+arg = "url"
+patterns = [
+    "http://localhost*", "https://localhost*",
+    "http://127.*", "https://127.*",
+    "http://10.*", "https://10.*",
+    "http://192.168.*", "https://192.168.*",
+    "*169.254.169.254*",
+]
+decision = "deny"
+priority = 100
+
+# Example: allow common safe shell commands without a prompt. Uncomment
+# and edit to taste.
+#
+# [[security.rule]]
+# tool = "exec"
+# arg = "command"
+# patterns = ["git diff*", "git log*", "git status*", "ls*", "cat*", "pwd"]
+# decision = "allow"
+# priority = 100
 "#
     )
 }

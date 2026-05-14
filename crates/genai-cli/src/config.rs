@@ -86,24 +86,47 @@ pub struct AliasEntry {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SecurityConfig {
-    /// Extra paths to refuse in `read_file` / `list_dir`. Merged onto the
-    /// built-in deny list (`~/.ssh/`, `~/.aws/`, `~/.gnupg/`, `~/.netrc`,
-    /// `<config_dir>/.env`). Prefix match after tilde expansion + symlink
-    /// resolution.
-    #[serde(default)]
-    pub read_paths_deny: Vec<String>,
-    /// Paths to permit even if they match a deny pattern. Allow wins.
-    #[serde(default)]
-    pub read_paths_allow: Vec<String>,
-    /// Extra hostnames or string prefixes to refuse in `fetch_url`. Merged
-    /// onto the built-in private-range list.
-    #[serde(default)]
-    pub fetch_hosts_deny: Vec<String>,
-    /// Hostnames to permit even when they match a deny pattern.
-    #[serde(default)]
-    pub fetch_hosts_allow: Vec<String>,
+    /// Tool-call policy. Rules are matched in descending `priority`;
+    /// ties broken by config-file order. First match decides.
+    #[serde(default, rename = "rule")]
+    pub rules: Vec<PolicyRule>,
     #[serde(default)]
     pub audit: AuditConfig,
+}
+
+/// One entry in the tool-call policy. See `tools::policy` for evaluation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyRule {
+    /// Tool selector. Either a single name, a glob (`"*"`, `"read_*"`),
+    /// or a list of exact names.
+    pub tool: ToolSelector,
+    /// Optional: name of the string-valued arg to match against. Omit for
+    /// tool-level rules that don't inspect args.
+    #[serde(default)]
+    pub arg: Option<String>,
+    /// Optional: list of glob patterns to match the chosen arg against.
+    /// `*` matches any run of characters. Empty/missing means "any value".
+    #[serde(default)]
+    pub patterns: Vec<String>,
+    pub decision: Decision,
+    /// Higher wins. Default 0. Ties: config-file order.
+    #[serde(default)]
+    pub priority: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ToolSelector {
+    Single(String),
+    List(Vec<String>),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Decision {
+    Allow,
+    Deny,
+    Prompt,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

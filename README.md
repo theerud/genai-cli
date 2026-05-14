@@ -237,22 +237,30 @@ Available tools:
 
 When any local tool is active, streaming output is disabled and the model is allowed to call tools up to 8 times before producing a final answer. Each call prints a `[tool] …` line on stderr.
 
-### Tool safety
+### Tool-call policy
 
-Defaults that protect against prompt-injection-style attacks via tool output:
-
-- **`read_file` / `list_dir`** refuse anything under `~/.ssh/`, `~/.aws/`, `~/.gnupg/`, `~/.netrc`, and `<config_dir>/.env`. Symlinks are resolved before the check.
-- **`fetch_url`** refuses `localhost`, the IPv4 RFC1918 ranges, `169.254.169.254` (cloud metadata), and a few other private/link-local prefixes.
-- **`exec` and other confirmable tools** prompt `[y/N/A]`. `A` trusts that tool for the rest of the REPL session.
-- Every tool call is appended to `<data_dir>/tool-log.jsonl` (one JSON line each). Soft-capped at 5000 lines; trimmed in place.
-
-Override with explicit allow lists when you need to:
+Every tool call passes through a single rule-based policy. Rules look like:
 
 ```toml
-[security]
-read_paths_allow = ["~/.ssh/known_hosts"]
-fetch_hosts_allow = ["localhost"]
+[[security.rule]]
+tool = "exec"                       # exact name, glob ("*", "read_*"), or list
+arg = "command"                     # optional; the arg to match against
+patterns = ["git diff*", "ls*"]     # `*` is the only wildcard; anchored both ends
+decision = "allow"                  # "allow" | "deny" | "prompt"
+priority = 100                      # higher wins; ties broken by config order
+```
 
+Evaluation: rules are checked in descending `priority`; the first match decides. If no rule matches, a built-in floor refuses sensitive paths (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`) and private networks (RFC1918, link-local, cloud metadata). What survives the floor falls through to the tool's own default — meaning `exec` and confirmable user tools prompt `[y/N/A]`, read-only built-ins run silently.
+
+The defaults are written into `config.toml` by `genai init` so you can see and edit them.
+
+#### Other safety knobs
+
+- `[y/N/A]` confirmation. **`A`** trusts that tool for the rest of the REPL session. `.trust list / drop <name> / clear` exposes the trust state.
+- `<data_dir>/tool-log.jsonl` audit log (one JSON line per call). View with `genai audit tail` or `.audit [N]`.
+- User-defined tools declare their confirmation policy: `confirmation = true/false` or `confirmation = "always"/"never"`.
+
+```toml
 [security.audit]
 enabled = true
 max_lines = 5000

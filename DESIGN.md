@@ -118,16 +118,39 @@ MCP is explicitly out of scope for v0.
 
 The CLI takes a "pragmatic middle" stance: trust the user for foreground actions (typed prompts), defend against the *background* path (prompt injection via tool outputs reaching credentials or internal services).
 
-**Defaults (override under `[security]` in config):**
+#### Policy (uniform across all tools)
 
-- **`read_file` / `list_dir`** refuse any path under `~/.ssh/`, `~/.aws/`, `~/.gnupg/`, `~/.netrc`, `<config_dir>/.env`. Paths are `canonicalize`d first so a symlink can't bypass.
-- **`fetch_url`** refuses `localhost`, `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16` (incl. cloud metadata at `169.254.169.254`), `0.0.0.0/8`, and `::1`. Literal-host match against the URL — no DNS resolution.
-- **Confirmation** for side-effecting tools: y/N/A. `A` trusts that tool for the rest of the REPL session, reducing fatigue without losing the confirmation step for first-use.
-- **Audit log**: every tool call (including denies) is appended as one JSON line to `<data_dir>/tool-log.jsonl`. Soft-capped at 5000 lines; trimmed in place once the file grows 10% past the cap.
+Tool calls flow through a single rule-based policy. Each rule names a tool (or set of tools), optionally matches against one string-valued arg, and assigns a decision:
 
-**User-defined tools** declare their confirmation policy as either `confirmation = true/false` or `confirmation = "always" \| "never"`.
+```toml
+[[security.rule]]
+tool = "exec"                       # exact name, glob ("*", "read_*"), or list
+arg = "command"                     # optional; which arg to match
+patterns = ["git diff*", "ls*"]     # glob: `*` is the only wildcard, anchored both ends
+decision = "allow"                  # "allow" | "deny" | "prompt"
+priority = 100                      # higher wins; ties broken by config order
+```
 
-**Explicitly out of scope for this layer:** sandboxing `exec` (no chroot/bubblewrap/landlock yet), DNS-rebinding defenses on `fetch_url`, per-role permission profiles. These belong to a future "real threat model" pass if real-world friction shows the current layer is insufficient.
+Evaluation:
+
+1. Walk rules in descending priority.
+2. First rule whose `tool` matches AND (if `arg`/`patterns` set) whose `patterns` match the named arg wins.
+3. If no rule matches, a built-in floor refuses sensitive paths (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `<config_dir>/.env`) and private networks (RFC1918, link-local, `127.0.0.0/8`, `0.0.0.0/8`, cloud metadata).
+4. Anything that survives the floor falls through to the tool's own `requires_confirmation()` default — which means `exec` and confirmable user tools prompt y/N/A, and read-only built-ins run silently.
+
+For tools that take path args, the policy matches against the *canonicalized* path (symlinks resolved), so `ln -s ~/.ssh /tmp/x` can't bypass a path-based deny.
+
+`genai init` writes the default rules out as commented examples so the user can see and edit them.
+
+#### Other security surfaces
+
+- **Per-session trust** for confirmable tools: y/N/A. `A` trusts that tool for the rest of the REPL session. `.trust list / drop <name> / clear` exposes the state.
+- **Audit log**: every tool call (including denies) is appended as one JSON line to `<data_dir>/tool-log.jsonl`. Soft-capped at 5000 lines; trimmed in place once the file grows 10% past the cap. Viewable via `genai audit tail` or `.audit [N]`.
+- **User-defined tools** declare their confirmation policy as either `confirmation = true/false` or `confirmation = "always" | "never"`.
+
+#### Out of scope for v0
+
+Sandboxing (chroot/bubblewrap/landlock), DNS-rebinding defenses, per-role permission profiles, time-bounded rules, glob features beyond `*` (no `?`, no character classes, no regex). These belong to a future iteration if real-world friction makes them earn their weight.
 
 ## Aliases
 

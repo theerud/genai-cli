@@ -116,20 +116,49 @@ pub async fn run(
             debug!(tool = %call.name, %summary, "tool call");
             ui.announce_call(&call.name, &summary);
 
-            let response_value = if tool.requires_confirmation() {
-                match ui.confirm(&call.name, &summary) {
-                    Confirmation::Allow => execute_and_audit(&call.name, tool, &call.args, ui),
-                    Confirmation::Deny => {
-                        let v = serde_json::json!({
-                            "error": "user denied tool execution",
-                        });
-                        ui.announce_result(&call.name, false, "denied by user");
-                        crate::audit::log(&call.name, &call.args, "denied", "denied by user");
-                        v
+            // Resolve policy against the tool-normalized args (canonical
+            // paths, etc.). The result decides whether to run, refuse, or
+            // prompt — overriding the tool's `requires_confirmation` only
+            // for explicit allow/deny.
+            let normalized = tool.normalize_for_policy(&call.args);
+            let outcome = super::policy::evaluate(&call.name, &normalized);
+            debug!(tool = %call.name, decision = ?outcome.decision, source = %outcome.source.label(), "policy");
+
+            let response_value = match outcome.decision {
+                crate::config::Decision::Deny => {
+                    let msg = format!("policy denied (matched {})", outcome.source.label());
+                    let v = serde_json::json!({"error": msg.clone()});
+                    ui.announce_result(&call.name, false, &msg);
+                    crate::audit::log(&call.name, &call.args, "denied", &msg);
+                    v
+                }
+                crate::config::Decision::Allow => {
+                    execute_and_audit(&call.name, tool, &call.args, ui)
+                }
+                crate::config::Decision::Prompt => {
+                    if !tool.requires_confirmation() {
+                        execute_and_audit(&call.name, tool, &call.args, ui)
+                    } else {
+                        match ui.confirm(&call.name, &summary) {
+                            Confirmation::Allow => {
+                                execute_and_audit(&call.name, tool, &call.args, ui)
+                            }
+                            Confirmation::Deny => {
+                                let v = serde_json::json!({
+                                    "error": "user denied tool execution",
+                                });
+                                ui.announce_result(&call.name, false, "denied by user");
+                                crate::audit::log(
+                                    &call.name,
+                                    &call.args,
+                                    "denied",
+                                    "denied by user",
+                                );
+                                v
+                            }
+                        }
                     }
                 }
-            } else {
-                execute_and_audit(&call.name, tool, &call.args, ui)
             };
 
             response_parts.push(Part::FunctionResponse {

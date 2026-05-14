@@ -7,7 +7,6 @@ use crate::gemini::tts::{MusicRequest, TtsRequest};
 use crate::models::alias;
 use crate::output;
 use crate::role;
-use crate::ui;
 
 use super::ReplState;
 use super::commands::ActionArgs;
@@ -37,7 +36,9 @@ pub(super) async fn handle_image_cmd(state: &mut ReplState, args: ActionArgs) ->
 
     let out_path = match &args.output {
         Some(s) => s.clone(),
-        None => ui::read_line("Output path (or '-' for stdout)")?,
+        None => output::default_generated_path(&state.cfg, output::GeneratedKind::Image, &args.prompt)?
+            .display()
+            .to_string(),
     };
 
     let inputs = output::load_input_images(&args.files)?;
@@ -71,7 +72,9 @@ pub(super) async fn handle_tts_cmd(state: &mut ReplState, args: ActionArgs) -> R
 
     let out_path = match &args.output {
         Some(s) => s.clone(),
-        None => ui::read_line("Output path (or '-' for stdout)")?,
+        None => output::default_generated_path(&state.cfg, output::GeneratedKind::Tts, &args.prompt)?
+            .display()
+            .to_string(),
     };
     let voice = args
         .voice
@@ -104,7 +107,9 @@ pub(super) async fn handle_music_cmd(state: &mut ReplState, args: ActionArgs) ->
 
     let out_path = match &args.output {
         Some(s) => s.clone(),
-        None => ui::read_line("Output path (or '-' for stdout)")?,
+        None => output::default_generated_path(&state.cfg, output::GeneratedKind::Music, &args.prompt)?
+            .display()
+            .to_string(),
     };
 
     let audio = {

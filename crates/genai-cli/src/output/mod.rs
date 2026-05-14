@@ -4,11 +4,13 @@
 
 pub mod image_preview;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use imagesize::ImageType;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::config::Config;
 use crate::gemini::image::{self as image_api, ImageOut, InputImage};
 use crate::gemini::tts::{AudioOut, extension_for_mime, pcm16_to_wav};
 use crate::session::attachment;
@@ -46,6 +48,120 @@ fn format_label(t: ImageType) -> &'static str {
         ImageType::Jxl => "jxl",
         _ => "?",
     }
+}
+
+/// Media generation flavors. Determines the filename prefix and which
+/// config dir override applies when the user didn't pass `-o`.
+#[derive(Debug, Clone, Copy)]
+pub enum GeneratedKind {
+    Image,
+    Tts,
+    Music,
+}
+
+impl GeneratedKind {
+    fn prefix(&self) -> &'static str {
+        match self {
+            GeneratedKind::Image => "image",
+            GeneratedKind::Tts => "tts",
+            GeneratedKind::Music => "music",
+        }
+    }
+
+    fn config_override<'a>(&self, cfg: &'a Config) -> Option<&'a str> {
+        match self {
+            GeneratedKind::Image => cfg.output.image_dir.as_deref(),
+            GeneratedKind::Tts | GeneratedKind::Music => cfg.output.audio_dir.as_deref(),
+        }
+    }
+}
+
+/// Auto-generated path for media output when the caller didn't pass `-o`.
+/// Returns a path *without* extension — `write_audio` and `write_images`
+/// already append the right one based on the response mime.
+///
+/// Directory resolution: `[output].image_dir` / `[output].audio_dir`
+/// (if set) → `<data_dir>/generated/`. The directory is created if it
+/// doesn't exist.
+pub fn default_generated_path(
+    cfg: &Config,
+    kind: GeneratedKind,
+    prompt: &str,
+) -> Result<PathBuf> {
+    let base = match kind.config_override(cfg) {
+        Some(dir) => PathBuf::from(expand_path(dir)),
+        None => {
+            let paths = crate::config::paths()?;
+            paths.data_dir.join("generated")
+        }
+    };
+    std::fs::create_dir_all(&base)
+        .with_context(|| format!("creating {}", base.display()))?;
+    let stem = format!(
+        "{}-{}-{}",
+        kind.prefix(),
+        compact_timestamp(),
+        slugify(prompt)
+    );
+    Ok(base.join(stem))
+}
+
+/// `YYYYMMDDhhmmss` UTC. Plenty unique for human-paced media generation.
+fn compact_timestamp() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0) as i64;
+    let days = secs.div_euclid(86400);
+    let s_of_day = secs.rem_euclid(86400);
+    let h = s_of_day / 3600;
+    let m = (s_of_day % 3600) / 60;
+    let s = s_of_day % 60;
+    let (y, mo, d) = civil_from_days(days);
+    format!("{y:04}{mo:02}{d:02}{h:02}{m:02}{s:02}")
+}
+
+fn civil_from_days(z: i64) -> (i32, u32, u32) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = (yoe as i32) + (era as i32) * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+/// Filesystem-safe slug derived from a prompt. ASCII-lowercase, hyphens
+/// for separators, capped at 22 chars. Empty / non-ASCII-only input
+/// returns `"untitled"`.
+fn slugify(prompt: &str) -> String {
+    const MAX_LEN: usize = 22;
+    let mut out = String::with_capacity(MAX_LEN);
+    let mut prev_dash = true; // suppresses leading dashes
+    for ch in prompt.chars() {
+        if out.len() >= MAX_LEN {
+            break;
+        }
+        let lower = ch.to_ascii_lowercase();
+        if lower.is_ascii_alphanumeric() {
+            out.push(lower);
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        out.push_str("untitled");
+    }
+    out
 }
 
 /// Expand a leading `~/` against `$HOME`. Anything else is passed through.
@@ -115,7 +231,13 @@ pub fn write_images(output: &str, images: &[ImageOut], preview: image_preview::P
         return Ok(());
     }
     if images.len() == 1 {
-        let path = PathBuf::from(expand_path(output));
+        let mut path = PathBuf::from(expand_path(output));
+        // If the user (or auto-generated stem) gave us a path without
+        // an extension, infer one from the response mime so the file
+        // opens with the right viewer.
+        if path.extension().is_none() {
+            path.set_extension(image_api::extension_for_mime(&images[0].mime));
+        }
         create_parent_dirs(&path)?;
         std::fs::write(&path, &images[0].bytes)?;
         eprintln!("wrote {} {}", path.display(), describe_image(&images[0].bytes));
@@ -185,6 +307,31 @@ mod tests {
         assert!(s.starts_with("["), "got {s}");
         assert!(s.ends_with("KB]"), "got {s}");
         assert!(!s.contains('×'), "got {s}");
+    }
+
+    #[test]
+    fn slug_basic() {
+        assert_eq!(slugify("a watercolor cat"), "a-watercolor-cat");
+    }
+
+    #[test]
+    fn slug_truncates_at_word_or_letter_boundary() {
+        // 30+ chars input → exactly 22 chars output (cap).
+        let s = slugify("the quick brown fox jumps over a lazy dog");
+        assert!(s.len() <= 22, "got {s:?}");
+        assert!(!s.starts_with('-') && !s.ends_with('-'));
+    }
+
+    #[test]
+    fn slug_strips_punctuation_and_collapses() {
+        assert_eq!(slugify("Hello, world!!  Foo??"), "hello-world-foo");
+    }
+
+    #[test]
+    fn slug_empty_falls_back() {
+        assert_eq!(slugify(""), "untitled");
+        assert_eq!(slugify("###"), "untitled");
+        assert_eq!(slugify("日本語"), "untitled"); // non-ASCII only
     }
 
     #[test]

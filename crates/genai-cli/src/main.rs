@@ -100,6 +100,32 @@ fn print_error_chain(err: &anyhow::Error) {
     }
 }
 
+/// Resolve `-o` for media subcommands.
+///
+/// - `Some(path)` passes through unchanged.
+/// - None + TTY stdout → auto-generate a path under `<data_dir>/generated/`
+///   (or the user-configured override).
+/// - None + non-TTY stdout → error, because silently writing files when
+///   scripts expected stdout binary would be a surprise; the user almost
+///   certainly meant `-o -`.
+fn resolve_one_shot_output(
+    cli: &Cli,
+    cfg: &config::Config,
+    kind: output::GeneratedKind,
+    prompt: &str,
+) -> Result<String> {
+    if let Some(s) = cli.output.clone() {
+        return Ok(s);
+    }
+    if !std::io::stdout().is_terminal() {
+        anyhow::bail!(
+            "no output path; pass -o <path> or -o - when stdout is not a TTY"
+        );
+    }
+    let path = output::default_generated_path(cfg, kind, prompt)?;
+    Ok(path.display().to_string())
+}
+
 async fn run_one_shot(cfg: &config::Config, cli: &Cli, prompt: String) -> Result<()> {
     let registry = models::Registry::load()?;
 
@@ -156,10 +182,7 @@ async fn run_one_shot_tts(
     resolved: &ResolvedModel,
 ) -> Result<()> {
     let api_key = cfg.require_api_key()?;
-    let output = cli
-        .output
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("TTS requires -o <path> or -o -"))?;
+    let output = resolve_one_shot_output(cli, cfg, output::GeneratedKind::Tts, &text)?;
     let client = Client::new(api_key.to_string(), cfg.api_base().to_string())?;
     let audio = {
         let _s = spinner::Spinner::start("synthesizing speech...");
@@ -181,10 +204,7 @@ async fn run_one_shot_music(
     resolved: &ResolvedModel,
 ) -> Result<()> {
     let api_key = cfg.require_api_key()?;
-    let output = cli
-        .output
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("music requires -o <path> or -o -"))?;
+    let output = resolve_one_shot_output(cli, cfg, output::GeneratedKind::Music, &prompt)?;
     let client = Client::new(api_key.to_string(), cfg.api_base().to_string())?;
     let audio = {
         let _s = spinner::Spinner::start("generating music...");
@@ -205,10 +225,7 @@ async fn run_one_shot_image(
     resolved: &ResolvedModel,
 ) -> Result<()> {
     let api_key = cfg.require_api_key()?;
-    let output = cli
-        .output
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("image generation requires -o <path> or -o -"))?;
+    let output = resolve_one_shot_output(cli, cfg, output::GeneratedKind::Image, &prompt)?;
 
     let client = Client::new(api_key.to_string(), cfg.api_base().to_string())?;
 

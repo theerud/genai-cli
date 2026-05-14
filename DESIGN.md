@@ -114,6 +114,21 @@ default = 10
 
 MCP is explicitly out of scope for v0.
 
+### Security model
+
+The CLI takes a "pragmatic middle" stance: trust the user for foreground actions (typed prompts), defend against the *background* path (prompt injection via tool outputs reaching credentials or internal services).
+
+**Defaults (override under `[security]` in config):**
+
+- **`read_file` / `list_dir`** refuse any path under `~/.ssh/`, `~/.aws/`, `~/.gnupg/`, `~/.netrc`, `<config_dir>/.env`. Paths are `canonicalize`d first so a symlink can't bypass.
+- **`fetch_url`** refuses `localhost`, `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16` (incl. cloud metadata at `169.254.169.254`), `0.0.0.0/8`, and `::1`. Literal-host match against the URL — no DNS resolution.
+- **Confirmation** for side-effecting tools: y/N/A. `A` trusts that tool for the rest of the REPL session, reducing fatigue without losing the confirmation step for first-use.
+- **Audit log**: every tool call (including denies) is appended as one JSON line to `<data_dir>/tool-log.jsonl`. Soft-capped at 5000 lines; trimmed in place once the file grows 10% past the cap.
+
+**User-defined tools** declare their confirmation policy as either `confirmation = true/false` or `confirmation = "always" \| "never"`.
+
+**Explicitly out of scope for this layer:** sandboxing `exec` (no chroot/bubblewrap/landlock yet), DNS-rebinding defenses on `fetch_url`, per-role permission profiles. These belong to a future "real threat model" pass if real-world friction shows the current layer is insufficient.
+
 ## Aliases
 
 Named model + model-level params (no system prompt). Usable anywhere a model ID is expected. Resolution: alias lookup first, then raw model ID against registry, else error.

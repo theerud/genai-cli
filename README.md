@@ -237,6 +237,27 @@ Available tools:
 
 When any local tool is active, streaming output is disabled and the model is allowed to call tools up to 8 times before producing a final answer. Each call prints a `[tool] …` line on stderr.
 
+### Tool safety
+
+Defaults that protect against prompt-injection-style attacks via tool output:
+
+- **`read_file` / `list_dir`** refuse anything under `~/.ssh/`, `~/.aws/`, `~/.gnupg/`, `~/.netrc`, and `<config_dir>/.env`. Symlinks are resolved before the check.
+- **`fetch_url`** refuses `localhost`, the IPv4 RFC1918 ranges, `169.254.169.254` (cloud metadata), and a few other private/link-local prefixes.
+- **`exec` and other confirmable tools** prompt `[y/N/A]`. `A` trusts that tool for the rest of the REPL session.
+- Every tool call is appended to `<data_dir>/tool-log.jsonl` (one JSON line each). Soft-capped at 5000 lines; trimmed in place.
+
+Override with explicit allow lists when you need to:
+
+```toml
+[security]
+read_paths_allow = ["~/.ssh/known_hosts"]
+fetch_hosts_allow = ["localhost"]
+
+[security.audit]
+enabled = true
+max_lines = 5000
+```
+
 ### User-defined tools
 
 Drop a TOML file in `<config_dir>/tools/<name>.toml`:

@@ -19,10 +19,41 @@ struct UserToolSpec {
     command: Vec<String>,
     #[serde(default)]
     timeout_secs: Option<u64>,
+    /// `true`/`false` or the strings `"always"`/`"never"`. Anything else
+    /// is treated as `false` with a warning at load time.
     #[serde(default)]
-    confirmation: bool,
+    confirmation: ConfirmationField,
     #[serde(default)]
     args: HashMap<String, ArgSpec>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(untagged)]
+enum ConfirmationField {
+    Bool(bool),
+    Policy(String),
+    #[default]
+    None,
+}
+
+impl ConfirmationField {
+    fn requires_confirmation(&self, tool_name: &str) -> bool {
+        match self {
+            ConfirmationField::Bool(b) => *b,
+            ConfirmationField::Policy(s) => match s.as_str() {
+                "always" => true,
+                "never" => false,
+                other => {
+                    eprintln!(
+                        "warning: tool '{tool_name}': unknown confirmation value '{other}'; \
+                         treating as false"
+                    );
+                    false
+                }
+            },
+            ConfirmationField::None => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -170,13 +201,14 @@ fn load_one(path: &Path, name: &str, bin_dir: &Path) -> Result<UserTool> {
     }
     let mut args: Vec<(String, ArgSpec)> = spec.args.into_iter().collect();
     args.sort_by(|a, b| a.0.cmp(&b.0));
+    let confirmation = spec.confirmation.requires_confirmation(name);
     Ok(UserTool {
         name: name.to_string(),
         description: spec.description,
         args,
         command: spec.command,
         timeout_secs: spec.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS),
-        confirmation: spec.confirmation,
+        confirmation,
         bin_dir: bin_dir.to_path_buf(),
     })
 }
@@ -360,6 +392,27 @@ mod tests {
         )];
         let v = coerce_args(&spec, &json!({})).unwrap();
         assert_eq!(v.get("n"), Some(&json!(7)));
+    }
+
+    #[test]
+    fn confirmation_field_accepts_bool_and_string() {
+        let yes: ConfirmationField = toml::from_str("v = true").map(|t: toml::Value| {
+            let v = t.get("v").unwrap().clone();
+            v.try_into().unwrap()
+        }).unwrap();
+        assert!(yes.requires_confirmation("t"));
+
+        let always: ConfirmationField = toml::from_str("v = \"always\"").map(|t: toml::Value| {
+            let v = t.get("v").unwrap().clone();
+            v.try_into().unwrap()
+        }).unwrap();
+        assert!(always.requires_confirmation("t"));
+
+        let never: ConfirmationField = toml::from_str("v = \"never\"").map(|t: toml::Value| {
+            let v = t.get("v").unwrap().clone();
+            v.try_into().unwrap()
+        }).unwrap();
+        assert!(!never.requires_confirmation("t"));
     }
 
     #[test]

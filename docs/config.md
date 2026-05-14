@@ -1,0 +1,128 @@
+# Configuration reference
+
+All config lives under `~/.config/genai/` by default. Override the entire root with `GENAI_HOME=/some/path` and the CLI looks at `$GENAI_HOME/{config,data,cache}/` instead.
+
+## API key
+
+First match wins:
+
+1. **Process env**: `GEMINI_API_KEY=...` (override the variable name via `api_key_env` in `config.toml`)
+2. **`./.env`** in the current working directory
+3. **`<config_dir>/.env`**
+4. **`api_key = "..."`** field in `config.toml` (least preferred — keep it out of dotfiles)
+
+`.env` files use the standard `KEY=VALUE` format with optional `"..."` / `'...'` quoting and `export ` prefix support.
+
+## Environment variables
+
+| Variable | Effect |
+|---|---|
+| `GENAI_HOME` | Override the config / data / cache root. Useful for scratch / test isolation. |
+| `GENAI_LOG` (falls back to `RUST_LOG`) | `tracing` filter for debug output to stderr. Examples: `genai=debug`, `info,genai::gemini=trace`. Empty/unset means no log output. |
+| `GEMINI_API_KEY` (or whatever `api_key_env` names) | API key. |
+
+## `config.toml`
+
+`genai init` writes a working baseline. Reference of every key:
+
+```toml
+# Optional: name the env variable to read the API key from.
+# api_key_env = "GEMINI_API_KEY"
+
+# Optional: override the Gemini API host.
+# api_base = "https://generativelanguage.googleapis.com"
+
+# Optional: API key inline (least preferred).
+# api_key = "..."
+
+# ----- Model defaults -----
+
+[model.chat]
+default = "gemini-2.5-flash"
+# temperature = 0.7
+# max_tokens = 8192
+# system_prompt = "You are concise."
+
+[model.image]
+default = "gemini-2.5-flash-image"
+
+[model.tts]
+default = "gemini-2.5-flash-preview-tts"
+voice = "Kore"
+
+[model.embed]
+default = "gemini-embedding-2"
+
+# ----- REPL ergonomics -----
+
+[repl]
+markdown = true              # render ANSI-colored markdown to a TTY
+color = true                 # syntax-highlight fenced code blocks
+# history_size = 10000
+
+# ----- Output -----
+
+[output]
+# In-terminal image preview after .image / image generation.
+# "auto" probes the terminal; "iterm2"/"kitty" force a protocol; "off" disables.
+image_preview = "auto"
+# image_dir = "~/Pictures/genai"
+# audio_dir = "~/Music/genai"
+
+# ----- Aliases -----
+# Named bundles of (model, per-model params) usable anywhere a model id is
+# expected.
+
+[aliases.pro-high]
+model = "gemini-2.5-pro"
+thinking_level = "high"
+
+[aliases.fast]
+model = "gemini-2.5-flash-lite"
+temperature = 0.3
+
+# ----- Security: tool-call policy -----
+# See docs/tools.md#policy for full semantics.
+
+[[security.rule]]
+tool = ["read_file", "list_dir"]
+arg = "path"
+patterns = ["*/.ssh/*", "*/.aws/*", "*/.gnupg/*", "*/.netrc"]
+decision = "deny"
+priority = 100
+
+[[security.rule]]
+tool = "fetch_url"
+arg = "url"
+patterns = [
+    "http://localhost*", "https://localhost*",
+    "http://127.*", "http://10.*", "http://192.168.*",
+    "*169.254.169.254*",
+]
+decision = "deny"
+priority = 100
+
+# ----- Security: audit log -----
+
+[security.audit]
+enabled = true
+max_lines = 5000             # soft cap; trims in place at +10%
+```
+
+## `thinking_level`
+
+Maps to a Gemini thinking budget:
+
+| Value | Budget |
+|---|---|
+| `"off"` / `"none"` | 0 |
+| `"low"` | 1024 |
+| `"medium"` | 8192 |
+| `"high"` | 24576 |
+| `"dynamic"` / `"auto"` | -1 (model decides) |
+
+## Schema notes
+
+- `[security.rule]` is a list of rules — repeat the table for each. Order doesn't matter; `priority` decides.
+- `[aliases.NAME]` is a single rule per alias.
+- Most fields are optional; defaults are documented in [docs/design.md](design.md).

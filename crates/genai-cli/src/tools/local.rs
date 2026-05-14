@@ -84,10 +84,11 @@ impl LocalTool for ReadFile {
     }
 
     fn run(&self, args: &Value) -> Result<Value> {
-        let path = expand_tilde(str_arg(args, "path")?);
+        let raw = str_arg(args, "path")?;
+        let path = super::safety::check_read_path(raw)?;
         let meta = std::fs::metadata(&path)?;
         if !meta.is_file() {
-            bail!("not a regular file: {path}");
+            bail!("not a regular file: {}", path.display());
         }
         let bytes = std::fs::read(&path)?;
         let total = bytes.len();
@@ -95,7 +96,7 @@ impl LocalTool for ReadFile {
         let slice = if truncated { &bytes[..MAX_READ_BYTES] } else { &bytes[..] };
         let text = String::from_utf8_lossy(slice).into_owned();
         Ok(json!({
-            "path": path,
+            "path": path.display().to_string(),
             "bytes": total,
             "truncated": truncated,
             "content": text,
@@ -138,10 +139,11 @@ impl LocalTool for ListDir {
     }
 
     fn run(&self, args: &Value) -> Result<Value> {
-        let path = expand_tilde(str_arg(args, "path")?);
+        let raw = str_arg(args, "path")?;
+        let path = super::safety::check_read_path(raw)?;
         let meta = std::fs::metadata(&path)?;
         if !meta.is_dir() {
-            bail!("not a directory: {path}");
+            bail!("not a directory: {}", path.display());
         }
         let mut entries = Vec::new();
         let mut truncated = false;
@@ -163,7 +165,7 @@ impl LocalTool for ListDir {
             entries.push(item);
         }
         Ok(json!({
-            "path": path,
+            "path": path.display().to_string(),
             "entries": entries,
             "truncated": truncated,
         }))
@@ -210,6 +212,7 @@ impl LocalTool for FetchUrl {
         if !url.starts_with("http://") && !url.starts_with("https://") {
             bail!("only http(s) URLs allowed");
         }
+        super::safety::check_fetch_url(&url)?;
         // The trait is sync but we run inside a multi-thread tokio runtime;
         // block in place and reuse the async reqwest client.
         let handle = tokio::runtime::Handle::current();
@@ -304,11 +307,3 @@ impl LocalTool for Exec {
     }
 }
 
-fn expand_tilde(s: &str) -> String {
-    if let Some(rest) = s.strip_prefix("~/")
-        && let Ok(home) = std::env::var("HOME")
-    {
-        return format!("{home}/{rest}");
-    }
-    s.to_string()
-}

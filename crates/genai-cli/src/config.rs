@@ -21,6 +21,8 @@ pub struct Config {
     pub repl: ReplConfig,
     #[serde(default)]
     pub aliases: BTreeMap<String, AliasEntry>,
+    #[serde(default)]
+    pub security: SecurityConfig,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -80,6 +82,26 @@ pub struct AliasEntry {
     pub model: String,
     pub temperature: Option<f32>,
     pub thinking_level: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SecurityConfig {
+    /// Extra paths to refuse in `read_file` / `list_dir`. Merged onto the
+    /// built-in deny list (`~/.ssh/`, `~/.aws/`, `~/.gnupg/`, `~/.netrc`,
+    /// `<config_dir>/.env`). Prefix match after tilde expansion + symlink
+    /// resolution.
+    #[serde(default)]
+    pub read_paths_deny: Vec<String>,
+    /// Paths to permit even if they match a deny pattern. Allow wins.
+    #[serde(default)]
+    pub read_paths_allow: Vec<String>,
+    /// Extra hostnames or string prefixes to refuse in `fetch_url`. Merged
+    /// onto the built-in private-range list.
+    #[serde(default)]
+    pub fetch_hosts_deny: Vec<String>,
+    /// Hostnames to permit even when they match a deny pattern.
+    #[serde(default)]
+    pub fetch_hosts_allow: Vec<String>,
 }
 
 pub struct Paths {

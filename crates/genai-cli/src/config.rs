@@ -102,6 +102,35 @@ pub struct SecurityConfig {
     /// Hostnames to permit even when they match a deny pattern.
     #[serde(default)]
     pub fetch_hosts_allow: Vec<String>,
+    #[serde(default)]
+    pub audit: AuditConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditConfig {
+    /// Append one JSON line per tool call to `<data_dir>/tool-log.jsonl`.
+    #[serde(default = "default_audit_enabled")]
+    pub enabled: bool,
+    /// Soft cap on the audit log. When exceeded by 10%, the file is
+    /// trimmed in place back to this many lines (oldest dropped).
+    #[serde(default = "default_audit_max_lines")]
+    pub max_lines: usize,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_audit_enabled(),
+            max_lines: default_audit_max_lines(),
+        }
+    }
+}
+
+fn default_audit_enabled() -> bool {
+    true
+}
+fn default_audit_max_lines() -> usize {
+    5000
 }
 
 pub struct Paths {

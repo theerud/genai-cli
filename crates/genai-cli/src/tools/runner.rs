@@ -100,6 +100,7 @@ pub async fn run(
             let Some(tool) = lookup_local(&call.name) else {
                 let err = serde_json::json!({"error": format!("unknown tool '{}'", call.name)});
                 ui.announce_result(&call.name, false, "unknown tool");
+                crate::audit::log(&call.name, &call.args, "err", "unknown tool");
                 response_parts.push(Part::FunctionResponse {
                     function_response: FunctionResponse {
                         name: call.name.clone(),
@@ -114,21 +115,18 @@ pub async fn run(
 
             let response_value = if tool.requires_confirmation() {
                 match ui.confirm(&call.name, &summary) {
-                    Confirmation::Allow => execute(tool, &call.args, &mut |ok, preview| {
-                        ui.announce_result(&call.name, ok, preview)
-                    }),
+                    Confirmation::Allow => execute_and_audit(&call.name, tool, &call.args, ui),
                     Confirmation::Deny => {
                         let v = serde_json::json!({
                             "error": "user denied tool execution",
                         });
                         ui.announce_result(&call.name, false, "denied by user");
+                        crate::audit::log(&call.name, &call.args, "denied", "denied by user");
                         v
                     }
                 }
             } else {
-                execute(tool, &call.args, &mut |ok, preview| {
-                    ui.announce_result(&call.name, ok, preview)
-                })
+                execute_and_audit(&call.name, tool, &call.args, ui)
             };
 
             response_parts.push(Part::FunctionResponse {
@@ -167,6 +165,25 @@ fn execute(
             serde_json::json!({"error": msg})
         }
     }
+}
+
+/// Run the tool, surface the result to the UI, and append an audit-log
+/// entry. Returns the value to feed back to the model.
+fn execute_and_audit(
+    name: &str,
+    tool: &dyn super::LocalTool,
+    args: &Value,
+    ui: &mut dyn ToolUi,
+) -> Value {
+    let mut audit_result = "ok".to_string();
+    let mut audit_preview = String::new();
+    let value = execute(tool, args, &mut |ok, preview| {
+        audit_result = if ok { "ok".into() } else { "err".into() };
+        audit_preview = preview.to_string();
+        ui.announce_result(name, ok, preview);
+    });
+    crate::audit::log(name, args, &audit_result, &audit_preview);
+    value
 }
 
 fn collect_text(c: &Content) -> String {

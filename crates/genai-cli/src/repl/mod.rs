@@ -38,6 +38,7 @@ pub struct ReplState {
     pub session: Option<ActiveSession>,
     pub role: Option<Role>,
     pub active_tools: Vec<String>,
+    pub tool_ui: tools::cli_ui::CliToolUi,
     pub usage: UsageStats,
 }
 
@@ -123,6 +124,7 @@ impl ReplState {
             session,
             role,
             active_tools,
+            tool_ui: tools::cli_ui::CliToolUi::new(),
             usage: UsageStats::default(),
         }
     }

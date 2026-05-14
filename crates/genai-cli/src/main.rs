@@ -463,7 +463,7 @@ async fn run_one_shot_with_tools(
         generation_config: build_generation_config(cfg, &resolved),
         enabled_tools,
     };
-    let mut ui = tools::cli_ui::CliToolUi;
+    let mut ui = tools::cli_ui::CliToolUi::new();
     let outcome = tools::runner::run(client, req, &mut ui).await?;
 
     let stdout = io::stdout();

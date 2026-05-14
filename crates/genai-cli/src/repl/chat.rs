@@ -120,8 +120,7 @@ async fn chat_turn_with_tools(
         generation_config: state.build_generation_config(),
         enabled_tools: state.active_tools.clone(),
     };
-    let mut ui = tools::cli_ui::CliToolUi;
-    let outcome = match tools::runner::run(&state.client, req, &mut ui).await {
+    let outcome = match tools::runner::run(&state.client, req, &mut state.tool_ui).await {
         Ok(o) => o,
         Err(e) => {
             eprintln!("(tool loop failed — turn discarded: {e})");

@@ -48,6 +48,23 @@ pub enum Command {
         #[arg(long)]
         force: bool,
     },
+    /// Inspect the tool-call audit log
+    Audit {
+        #[command(subcommand)]
+        sub: AuditCmd,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AuditCmd {
+    /// Show the last N audit-log entries (default 20)
+    Tail {
+        #[arg(short = 'n', long, default_value_t = 20)]
+        count: usize,
+        /// Print raw JSON lines instead of the formatted table
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

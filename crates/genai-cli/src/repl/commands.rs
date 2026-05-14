@@ -15,6 +15,7 @@ pub enum DotCmd {
     Music(ActionArgs),
     Tools(Option<String>),
     Preview(String),
+    Audit(Option<usize>),
     Undo,
     Retry,
     Unknown(String),
@@ -91,6 +92,10 @@ pub fn parse(line: &str) -> Option<DotCmd> {
             Some(path) => DotCmd::Preview(path),
             None => DotCmd::Unknown(".preview requires <path>".to_string()),
         },
+        "audit" => {
+            let n = tail.first().and_then(|s| s.parse::<usize>().ok());
+            DotCmd::Audit(n)
+        }
         _ => DotCmd::Unknown(format!("unknown command: .{head}")),
     };
     Some(cmd)

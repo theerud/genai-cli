@@ -31,6 +31,30 @@ fn settings() -> &'static Settings {
     })
 }
 
+/// Path to the audit log, if logging is enabled and the data dir is
+/// resolvable. Returns `None` when the log is disabled or unreachable.
+pub fn log_path() -> Option<&'static std::path::Path> {
+    let s = settings();
+    if !s.enabled {
+        return None;
+    }
+    s.path.as_deref()
+}
+
+/// Read the last `n` lines of the audit log, oldest-first. Returns an
+/// empty vec if the log doesn't exist or is disabled.
+pub fn tail(n: usize) -> Vec<String> {
+    let Some(path) = log_path() else {
+        return Vec::new();
+    };
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let lines: Vec<&str> = contents.lines().collect();
+    let start = lines.len().saturating_sub(n);
+    lines[start..].iter().map(|s| s.to_string()).collect()
+}
+
 /// Record a tool invocation. `result` is one of `"ok"`, `"err"`,
 /// `"denied"`. `preview` is a short human-readable summary already shown
 /// to the user; we replay it into the audit line so the log is

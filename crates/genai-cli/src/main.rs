@@ -16,7 +16,7 @@ use clap::Parser;
 use futures_util::StreamExt;
 use std::io::{self, IsTerminal, Write};
 
-use cli::{Cli, Command, ModelsCmd, SessionsCmd};
+use cli::{AuditCmd, Cli, Command, ModelsCmd, SessionsCmd};
 use gemini::Client;
 use gemini::chat::{ChatEvent, ChatRequest};
 use gemini::image::ImageRequest;
@@ -57,6 +57,9 @@ async fn real_main() -> Result<()> {
             },
             Command::Gc => cmd_gc(),
             Command::Init { force } => init::run(*force),
+            Command::Audit { sub } => match sub {
+                AuditCmd::Tail { count, json } => cmd_audit_tail(*count, *json),
+            },
         };
     }
 
@@ -606,5 +609,37 @@ fn cmd_gc() -> Result<()> {
     let n = session::gc_blobs(&mut db)?;
     eprintln!("removed {n} orphaned attachment(s)");
     Ok(())
+}
+
+fn cmd_audit_tail(count: usize, json: bool) -> Result<()> {
+    let lines = audit::tail(count);
+    if lines.is_empty() {
+        let path = audit::log_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(no log path)".to_string());
+        eprintln!("(audit log empty or missing: {path})");
+        return Ok(());
+    }
+    if json {
+        for line in &lines {
+            println!("{line}");
+        }
+    } else {
+        for line in &lines {
+            println!("{}", format_audit_line(line));
+        }
+    }
+    Ok(())
+}
+
+fn format_audit_line(line: &str) -> String {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+        return line.to_string();
+    };
+    let ts = v.get("ts").and_then(|t| t.as_str()).unwrap_or("?");
+    let tool = v.get("tool").and_then(|t| t.as_str()).unwrap_or("?");
+    let result = v.get("result").and_then(|t| t.as_str()).unwrap_or("?");
+    let preview = v.get("preview").and_then(|t| t.as_str()).unwrap_or("");
+    format!("{ts}  {result:<6}  {tool:<14}  {preview}")
 }
 

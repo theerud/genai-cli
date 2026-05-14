@@ -67,6 +67,7 @@ pub(super) async fn handle_command(state: &mut ReplState, cmd: DotCmd) -> Result
         DotCmd::Music(args) => media::handle_music_cmd(state, args).await?,
         DotCmd::Tools(arg) => handle_tools_cmd(state, arg)?,
         DotCmd::Preview(path) => handle_preview(state, &path)?,
+        DotCmd::Audit(n) => handle_audit(n.unwrap_or(20)),
         DotCmd::Undo => handle_undo(state)?,
         DotCmd::Retry => handle_retry(state).await?,
         DotCmd::Unknown(msg) => eprintln!("{msg}"),
@@ -199,6 +200,7 @@ Commands:
   .tools [list|name]        show / list / toggle built-in Gemini tools
   .image / .tts / .music    one-off generation in REPL
   .preview <path>    render an image inline (Kitty / iTerm2 terminals)
+  .audit [N]         show last N audit-log entries (default 20)
   .undo              drop last completed turn from history (+ session DB)
   .retry             re-run the last user message
 "
@@ -250,6 +252,28 @@ fn handle_tools_cmd(state: &mut ReplState, arg: Option<String>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn handle_audit(n: usize) {
+    let lines = crate::audit::tail(n);
+    if lines.is_empty() {
+        let path = crate::audit::log_path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(no log path)".to_string());
+        eprintln!("(audit log empty or missing: {path})");
+        return;
+    }
+    for line in lines {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
+            eprintln!("{line}");
+            continue;
+        };
+        let ts = v.get("ts").and_then(|t| t.as_str()).unwrap_or("?");
+        let tool = v.get("tool").and_then(|t| t.as_str()).unwrap_or("?");
+        let result = v.get("result").and_then(|t| t.as_str()).unwrap_or("?");
+        let preview = v.get("preview").and_then(|t| t.as_str()).unwrap_or("");
+        eprintln!("{ts}  {result:<6}  {tool:<14}  {preview}");
+    }
 }
 
 fn handle_preview(state: &ReplState, path: &str) -> Result<()> {

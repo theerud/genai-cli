@@ -50,7 +50,10 @@ pub(super) async fn handle_image_cmd(state: &mut ReplState, args: ActionArgs) ->
         count: None,
     };
 
-    let images = state.client.generate_image(req).await?;
+    let images = {
+        let _s = crate::spinner::Spinner::start("generating image...");
+        state.client.generate_image(req).await?
+    };
     let preview =
         output::image_preview::Preference::from_config(state.cfg.output.image_preview.as_deref());
     output::write_images(&out_path, &images, preview)?;
@@ -75,14 +78,17 @@ pub(super) async fn handle_tts_cmd(state: &mut ReplState, args: ActionArgs) -> R
         .clone()
         .or_else(|| state.cfg.model.tts.voice.clone());
 
-    let audio = state
-        .client
-        .synthesize_speech(TtsRequest {
-            model: resolved.id,
-            text: args.prompt,
-            voice,
-        })
-        .await?;
+    let audio = {
+        let _s = crate::spinner::Spinner::start("synthesizing speech...");
+        state
+            .client
+            .synthesize_speech(TtsRequest {
+                model: resolved.id,
+                text: args.prompt,
+                voice,
+            })
+            .await?
+    };
     output::write_audio(&out_path, &audio)?;
     Ok(())
 }
@@ -101,13 +107,16 @@ pub(super) async fn handle_music_cmd(state: &mut ReplState, args: ActionArgs) ->
         None => ui::read_line("Output path (or '-' for stdout)")?,
     };
 
-    let audio = state
-        .client
-        .generate_music(MusicRequest {
-            model: resolved.id,
-            prompt: args.prompt,
-        })
-        .await?;
+    let audio = {
+        let _s = crate::spinner::Spinner::start("generating music...");
+        state
+            .client
+            .generate_music(MusicRequest {
+                model: resolved.id,
+                prompt: args.prompt,
+            })
+            .await?
+    };
     output::write_audio(&out_path, &audio)?;
     Ok(())
 }

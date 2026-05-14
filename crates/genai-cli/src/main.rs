@@ -8,6 +8,7 @@ mod output;
 mod repl;
 mod role;
 mod session;
+mod spinner;
 mod tools;
 mod ui;
 
@@ -160,13 +161,16 @@ async fn run_one_shot_tts(
         .clone()
         .ok_or_else(|| anyhow::anyhow!("TTS requires -o <path> or -o -"))?;
     let client = Client::new(api_key.to_string(), cfg.api_base().to_string())?;
-    let audio = client
-        .synthesize_speech(TtsRequest {
-            model: resolved.id.clone(),
-            text,
-            voice: cfg.model.tts.voice.clone(),
-        })
-        .await?;
+    let audio = {
+        let _s = spinner::Spinner::start("synthesizing speech...");
+        client
+            .synthesize_speech(TtsRequest {
+                model: resolved.id.clone(),
+                text,
+                voice: cfg.model.tts.voice.clone(),
+            })
+            .await?
+    };
     write_audio(&output, &audio)
 }
 
@@ -182,12 +186,15 @@ async fn run_one_shot_music(
         .clone()
         .ok_or_else(|| anyhow::anyhow!("music requires -o <path> or -o -"))?;
     let client = Client::new(api_key.to_string(), cfg.api_base().to_string())?;
-    let audio = client
-        .generate_music(MusicRequest {
-            model: resolved.id.clone(),
-            prompt,
-        })
-        .await?;
+    let audio = {
+        let _s = spinner::Spinner::start("generating music...");
+        client
+            .generate_music(MusicRequest {
+                model: resolved.id.clone(),
+                prompt,
+            })
+            .await?
+    };
     write_audio(&output, &audio)
 }
 
@@ -214,7 +221,10 @@ async fn run_one_shot_image(
         aspect_ratio: None,
         count: None,
     };
-    let images = client.generate_image(req).await?;
+    let images = {
+        let _s = spinner::Spinner::start("generating image...");
+        client.generate_image(req).await?
+    };
     let preview = output::image_preview::Preference::from_config(cfg.output.image_preview.as_deref());
     write_images(&output, &images, preview)?;
     Ok(())
@@ -356,6 +366,7 @@ async fn run_one_shot_chat(
         tools: tools_list.as_deref(),
     };
 
+    let mut spinner = spinner::Spinner::start("thinking...");
     let mut stream = client.stream_chat(req).await?;
 
     let stdout = io::stdout();
@@ -371,6 +382,7 @@ async fn run_one_shot_chat(
     while let Some(ev) = stream.next().await {
         match ev? {
             ChatEvent::TextDelta(text) => {
+                spinner.take();
                 accumulated.push_str(&text);
                 renderer.push(&text);
             }

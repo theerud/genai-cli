@@ -62,7 +62,10 @@ pub async fn run(
             generation_config: req.generation_config.as_ref(),
             tools: tools.as_deref(),
         };
-        let resp = client.generate_content(chat_req).await?;
+        let resp = {
+            let _s = crate::spinner::Spinner::start("thinking...");
+            client.generate_content(chat_req).await?
+        };
         last_prompt = resp.prompt_tokens;
         last_output = resp.output_tokens;
         let model_content = resp
@@ -148,42 +151,34 @@ pub async fn run(
     ))
 }
 
-fn execute(
-    tool: &dyn super::LocalTool,
-    args: &Value,
-    report: &mut dyn FnMut(bool, &str),
-) -> Value {
-    match tool.run(args) {
-        Ok(v) => {
-            let preview = result_preview(&v);
-            report(true, &preview);
-            v
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            report(false, &msg);
-            serde_json::json!({"error": msg})
-        }
-    }
-}
-
 /// Run the tool, surface the result to the UI, and append an audit-log
-/// entry. Returns the value to feed back to the model.
+/// entry. Returns the value to feed back to the model. We don't reuse
+/// the lower-level `execute` helper here because the spinner has to be
+/// torn down *before* the result line prints — otherwise the cleared
+/// spinner line and the eprintln race on the same row.
 fn execute_and_audit(
     name: &str,
     tool: &dyn super::LocalTool,
     args: &Value,
     ui: &mut dyn ToolUi,
 ) -> Value {
-    let mut audit_result = "ok".to_string();
-    let mut audit_preview = String::new();
-    let value = execute(tool, args, &mut |ok, preview| {
-        audit_result = if ok { "ok".into() } else { "err".into() };
-        audit_preview = preview.to_string();
-        ui.announce_result(name, ok, preview);
-    });
-    crate::audit::log(name, args, &audit_result, &audit_preview);
-    value
+    let spinner = crate::spinner::Spinner::start(&format!("running {name}..."));
+    let outcome = tool.run(args);
+    drop(spinner);
+    match outcome {
+        Ok(v) => {
+            let preview = result_preview(&v);
+            ui.announce_result(name, true, &preview);
+            crate::audit::log(name, args, "ok", &preview);
+            v
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            ui.announce_result(name, false, &msg);
+            crate::audit::log(name, args, "err", &msg);
+            serde_json::json!({"error": msg})
+        }
+    }
 }
 
 fn collect_text(c: &Content) -> String {

@@ -35,6 +35,7 @@ pub(super) async fn chat_turn(state: &mut ReplState, user_text: String) -> Resul
         tools: tools_list.as_deref(),
     };
 
+    let spinner = crate::spinner::Spinner::start("thinking...");
     let stream = state.client.stream_chat(req).await?;
 
     let stdout = io::stdout();
@@ -45,7 +46,8 @@ pub(super) async fn chat_turn(state: &mut ReplState, user_text: String) -> Resul
     let mut accumulated = String::new();
     let mut last_usage = (None, None);
     let outcome =
-        consume_stream(stream, renderer.as_mut(), &mut accumulated, &mut last_usage).await;
+        consume_stream(stream, spinner, renderer.as_mut(), &mut accumulated, &mut last_usage)
+            .await;
     renderer.finish();
 
     match outcome {
@@ -168,10 +170,12 @@ enum StreamErr {
 
 async fn consume_stream(
     mut stream: crate::gemini::chat::ChatStream,
+    spinner: Option<crate::spinner::Spinner>,
     renderer: &mut dyn Renderer,
     accumulated: &mut String,
     last_usage: &mut (Option<u32>, Option<u32>),
 ) -> std::result::Result<(), StreamErr> {
+    let mut spinner = spinner;
     loop {
         tokio::select! {
             biased;
@@ -180,10 +184,14 @@ async fn consume_stream(
                 None => return Ok(()),
                 Some(Err(e)) => return Err(StreamErr::Failed(e)),
                 Some(Ok(ChatEvent::TextDelta(text))) => {
+                    // First real content arrived; tear down the spinner so
+                    // it doesn't fight the renderer for the same line.
+                    spinner.take();
                     accumulated.push_str(&text);
                     renderer.push(&text);
                 }
                 Some(Ok(ChatEvent::Finish { prompt_tokens, output_tokens, reason, message })) => {
+                    spinner.take();
                     *last_usage = (prompt_tokens, output_tokens);
                     warn_abnormal_finish(accumulated, reason.as_ref(), message.as_deref());
                     return Ok(());

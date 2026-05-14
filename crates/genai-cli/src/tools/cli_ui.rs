@@ -19,6 +19,24 @@ impl CliToolUi {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Tools trusted for the rest of this process. Sorted for stable display.
+    pub fn trusted_tools(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.trusted.iter().map(|s| s.as_str()).collect();
+        names.sort();
+        names
+    }
+
+    /// Forget all session trust. Subsequent confirmable-tool calls will
+    /// prompt again.
+    pub fn clear_trust(&mut self) {
+        self.trusted.clear();
+    }
+
+    /// Revoke trust for a single tool. Returns true if the tool was trusted.
+    pub fn revoke_trust(&mut self, name: &str) -> bool {
+        self.trusted.remove(name)
+    }
 }
 
 impl ToolUi for CliToolUi {

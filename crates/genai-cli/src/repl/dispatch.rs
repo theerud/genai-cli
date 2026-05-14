@@ -12,7 +12,7 @@ use crate::tools;
 
 use super::ReplState;
 use super::chat;
-use super::commands::DotCmd;
+use super::commands::{DotCmd, TrustCmd};
 use super::media;
 use super::sessions;
 
@@ -68,6 +68,7 @@ pub(super) async fn handle_command(state: &mut ReplState, cmd: DotCmd) -> Result
         DotCmd::Tools(arg) => handle_tools_cmd(state, arg)?,
         DotCmd::Preview(path) => handle_preview(state, &path)?,
         DotCmd::Audit(n) => handle_audit(n.unwrap_or(20)),
+        DotCmd::Trust(cmd) => handle_trust(state, cmd),
         DotCmd::Undo => handle_undo(state)?,
         DotCmd::Retry => handle_retry(state).await?,
         DotCmd::Unknown(msg) => eprintln!("{msg}"),
@@ -201,6 +202,8 @@ Commands:
   .image / .tts / .music    one-off generation in REPL
   .preview <path>    render an image inline (Kitty / iTerm2 terminals)
   .audit [N]         show last N audit-log entries (default 20)
+  .trust [list|clear|drop <name>]
+                     inspect / revoke session trust for confirmable tools
   .undo              drop last completed turn from history (+ session DB)
   .retry             re-run the last user message
 "
@@ -252,6 +255,33 @@ fn handle_tools_cmd(state: &mut ReplState, arg: Option<String>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn handle_trust(state: &mut ReplState, cmd: TrustCmd) {
+    match cmd {
+        TrustCmd::List => {
+            let trusted = state.tool_ui.trusted_tools();
+            if trusted.is_empty() {
+                eprintln!("(no tools trusted in this session)");
+            } else {
+                eprintln!("trusted for this session:");
+                for name in trusted {
+                    eprintln!("  {name}");
+                }
+            }
+        }
+        TrustCmd::Clear => {
+            state.tool_ui.clear_trust();
+            eprintln!("(session trust cleared)");
+        }
+        TrustCmd::Drop(name) => {
+            if state.tool_ui.revoke_trust(&name) {
+                eprintln!("(trust revoked: {name})");
+            } else {
+                eprintln!("({name} wasn't trusted)");
+            }
+        }
+    }
 }
 
 fn handle_audit(n: usize) {

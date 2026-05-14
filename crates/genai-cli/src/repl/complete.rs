@@ -13,7 +13,7 @@ use rustyline::validate::Validator;
 
 const DOT_COMMANDS: &[&str] = &[
     "help", "exit", "quit", "info", "clear", "model", "set", "file", "edit", "role", "session",
-    "image", "tts", "music", "tools", "preview", "audit", "undo", "retry",
+    "image", "tts", "music", "tools", "preview", "audit", "trust", "undo", "retry",
 ];
 
 const SESSION_SUBCOMMANDS: &[&str] = &[

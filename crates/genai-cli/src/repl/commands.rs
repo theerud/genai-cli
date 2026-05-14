@@ -16,9 +16,17 @@ pub enum DotCmd {
     Tools(Option<String>),
     Preview(String),
     Audit(Option<usize>),
+    Trust(TrustCmd),
     Undo,
     Retry,
     Unknown(String),
+}
+
+#[derive(Debug, Clone)]
+pub enum TrustCmd {
+    List,
+    Clear,
+    Drop(String),
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +104,12 @@ pub fn parse(line: &str) -> Option<DotCmd> {
             let n = tail.first().and_then(|s| s.parse::<usize>().ok());
             DotCmd::Audit(n)
         }
+        "trust" => match tail.as_slice() {
+            [] | ["list"] => DotCmd::Trust(TrustCmd::List),
+            ["clear"] => DotCmd::Trust(TrustCmd::Clear),
+            ["drop", name] => DotCmd::Trust(TrustCmd::Drop((*name).to_string())),
+            _ => DotCmd::Unknown(".trust: expected list / clear / drop <name>".to_string()),
+        },
         _ => DotCmd::Unknown(format!("unknown command: .{head}")),
     };
     Some(cmd)

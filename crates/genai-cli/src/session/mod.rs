@@ -88,7 +88,7 @@ fn part_to_json(p: &Part) -> serde_json::Value {
             "mime_type": inline_data.mime_type,
             "size": inline_data.data.len(),
         }),
-        Part::FunctionCall { function_call } => serde_json::json!({
+        Part::FunctionCall { function_call, .. } => serde_json::json!({
             "type":"function_call",
             "name": function_call.name,
             "args": function_call.args,

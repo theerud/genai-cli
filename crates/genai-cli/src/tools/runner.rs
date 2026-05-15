@@ -118,7 +118,7 @@ pub async fn run(
             .parts
             .iter()
             .filter_map(|p| match p {
-                Part::FunctionCall { function_call } => Some(function_call.clone()),
+                Part::FunctionCall { function_call, .. } => Some(function_call.clone()),
                 _ => None,
             })
             .collect();

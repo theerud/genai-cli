@@ -22,6 +22,15 @@ pub enum Part {
     FunctionCall {
         #[serde(rename = "functionCall")]
         function_call: FunctionCall,
+        /// Opaque signature emitted by Gemini's thinking-class models on
+        /// each functionCall part. Must be echoed back verbatim on the
+        /// next turn or the API rejects the request with 400.
+        #[serde(
+            rename = "thoughtSignature",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        thought_signature: Option<String>,
     },
     FunctionResponse {
         #[serde(rename = "functionResponse")]

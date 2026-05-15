@@ -33,30 +33,37 @@ tools = ["google_search", "url_context"]
 | `fetch_url` | `url` | http(s) GET, up to 1 MB |
 | `exec` | `command` | `sh -c …`; **subject to confirmation** |
 | `write_file` | `path`, `content`, `mode?` | Up to 10 MB UTF-8 text; `overwrite` (default) or `append`; **subject to confirmation** |
-| `generate_media` | `kind`, `prompt`, `output_path?`, `model?`, `preview?`, `image?`, `speech?`, `music?` | One tool for image / speech / music generation; auto-path under `data_dir/generated/`; **subject to confirmation** |
+| `generate_media` | `kind`, `prompt`, `output_path?`, `preview?`, `image?`, `speech?`, `music?` | One tool for image / speech / music generation; auto-path under `data_dir/generated/`; **subject to confirmation** |
 
 Confirmable tools (`exec`, `write_file`, `generate_media`) prompt `[y/N/A]` per call. `A` trusts the tool for the rest of the REPL session — see `.trust` below.
 
 ### `generate_media` shape
+
+The schema is **tailored at process start** to the active image model (`cfg.model.image.default`, falling back to `imagen-4.0-generate-001`). The LLM only sees parameters that actually apply, so it can't be tempted by a knob the backend doesn't accept.
 
 ```jsonc
 {
   "kind":        "image" | "speech" | "music",
   "prompt":      "...",                  // for speech, this is the text to read
   "output_path": "/abs/or/~/path.ext",   // optional; auto-named when omitted
-  "model":       "imagen-4...",          // optional; falls back to cfg defaults
   "preview":     true,                   // image only, TTY only; default true
 
-  "image":  { "aspect": "16:9", "count": 2, "input_paths": ["ref.png"] },
+  // When the active image model is Imagen-style (id starts with `imagen`):
+  "image":  { "aspect": "16:9", "count": 2 },
+
+  // When the active image model is conversational (gemini-*-image, nano-banana):
+  "image":  { "input_paths": ["ref.png"] },
+
   "speech": { "voice": "Kore" },
   "music":  { }
 }
 ```
 
-- `aspect` / `count` are Imagen-only; warn-and-drop for nano-banana models, same as the CLI.
-- `input_paths` enables nano-banana edit/variation workflows.
-- `preview` defaults to `true` so a one-off generation flashes on screen on Kitty/iTerm2-class terminals. Set `preview: false` in loop-mode roles for intermediate generations where the user only cares about the final asset. Silent no-op on terminals without inline-image support.
-- Multi-speaker TTS (Gemini 2.5) and Lyria 3's image input / lyrics / tempo are not yet wired through this tool; they will land in a follow-up slice under the same tool name.
+- The top-level `model` field is **not exposed** to the LLM. Image / TTS / music model is fixed by config; the LLM cannot override mid-call.
+- For Imagen-style: `aspect` enum-constrained to `1:1 / 16:9 / 9:16 / 4:3 / 3:4`; `count` integer-bounded to `1-4`.
+- For conversational: only `input_paths` is exposed; ratio / variant cues must stay in the prompt verbatim. The schema description tells the LLM exactly that.
+- `preview` defaults to `true` so casual one-offs flash on screen on Kitty/iTerm2-class terminals. Set `preview: false` in loop-mode roles for intermediate generations. Silent no-op on terminals without inline-image support.
+- Multi-speaker TTS (Gemini 2.5) and Lyria 3's image / lyrics / tempo inputs are deferred to a follow-up slice — same tool name, additive sub-object fields.
 
 ## User-defined tools
 

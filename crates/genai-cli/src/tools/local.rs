@@ -441,100 +441,91 @@ impl LocalTool for WriteFile {
 
 // ---------- generate_media ----------
 
-/// Group known media models from the registry into the buckets the
-/// `generate_media` schema cares about. Reads the registry once and
-/// partitions image models by "structured" (Imagen) vs "conversational"
-/// (Gemini image), plus the TTS and music groups. Failure to load the
-/// registry yields empty groups — the tool still works, the schema is
-/// just less specific.
-struct MediaModelGroups {
-    image_structured: Vec<String>,
-    image_conversational: Vec<String>,
-    speech: Vec<String>,
-    music: Vec<String>,
-}
-
-fn media_model_groups() -> MediaModelGroups {
-    let Ok(registry) = crate::models::Registry::load() else {
-        return MediaModelGroups {
-            image_structured: vec![],
-            image_conversational: vec![],
-            speech: vec![],
-            music: vec![],
-        };
-    };
-    let mut image_structured = Vec::new();
-    let mut image_conversational = Vec::new();
-    for m in registry.iter_capability(crate::models::CAP_IMAGE_OUT) {
-        if m.id.starts_with("imagen") {
-            image_structured.push(m.id.clone());
-        } else {
-            image_conversational.push(m.id.clone());
-        }
-    }
-    let speech: Vec<String> = registry
-        .iter_capability(crate::models::CAP_TTS)
-        .map(|m| m.id.clone())
-        .collect();
-    let music: Vec<String> = registry
-        .iter_capability(crate::models::CAP_MUSIC_OUT)
-        .map(|m| m.id.clone())
-        .collect();
-    image_structured.sort();
-    image_conversational.sort();
-    let mut groups = MediaModelGroups {
-        image_structured,
-        image_conversational,
-        speech,
-        music,
-    };
-    groups.speech.sort();
-    groups.music.sort();
-    groups
-}
-
-fn join_or_none(ids: &[String]) -> String {
-    if ids.is_empty() {
-        "(none in registry)".to_string()
-    } else {
-        ids.join(", ")
-    }
-}
-
 fn build_generate_media_declaration() -> FunctionDeclaration {
-    let groups = media_model_groups();
-    let image_structured = join_or_none(&groups.image_structured);
-    let image_conv = join_or_none(&groups.image_conversational);
-    let speech = join_or_none(&groups.speech);
-    let music = join_or_none(&groups.music);
+    // Resolve the *active* image model at process start. Roles can override
+    // cfg.model.image.default via aliases or by setting it directly. The
+    // schema is then shaped to only expose parameters that model accepts —
+    // no aspect/count for a conversational model, no input_paths for an
+    // Imagen one — so the LLM can't be tempted by an inapplicable field.
+    let cfg = crate::config::load().unwrap_or_default();
+    let image_model = cfg
+        .model
+        .image
+        .default
+        .clone()
+        .unwrap_or_else(|| "imagen-4.0-generate-001".to_string());
+    let is_structured = image_model.starts_with("imagen");
 
-    let description = "Generate media (image, speech, or music) and write it to disk. \
-        Returns the saved path plus metadata so subsequent tool calls (e.g. write_file \
-        embedding HTML) can reference the asset. Each invocation hits a paid API and \
-        requires user confirmation."
-        .to_string();
+    let description = format!(
+        "Generate media (image, speech, or music) and write it to disk. \
+         Returns the saved path plus metadata so subsequent tool calls (e.g. write_file \
+         embedding HTML) can reference the asset. Each invocation hits a paid API and \
+         requires user confirmation. \
+         The active image model is '{image_model}' ({group}); the schema below has been \
+         tailored to that model's accepted parameters. \
+         IMPORTANT: pass the user's verbatim prompt — do not summarize it, do not strip \
+         stylistic or compositional cues (aspect ratios, lighting, framing, etc.).",
+        group = if is_structured { "structured / Imagen-style" } else { "conversational / nano-banana-style" }
+    );
 
-    let model_description = format!(
-        "Optional model id or alias. Defaults to the configured default for the kind. \
-         Known model groups (case sensitive): \
-         image/structured (accepts aspect, count): {image_structured}; \
-         image/conversational (no aspect/count — describe orientation in the prompt): {image_conv}; \
-         speech: {speech}; music: {music}."
-    );
-    let aspect_description = format!(
-        "Only honored by image/structured models ({image_structured}). \
-         Ignored for image/conversational models — describe orientation in the prompt instead. \
-         Allowed values: 1:1, 16:9, 9:16, 4:3, 3:4."
-    );
-    let count_description = format!(
-        "Only honored by image/structured models ({image_structured}). \
-         Ignored for image/conversational models — call the tool again for a variant. \
-         Allowed range: 1-4."
-    );
-    let input_paths_description =
-        "Input images for edit / variation. Only useful with image/conversational models \
-         (the nano-banana family). Ignored by image/structured models."
-            .to_string();
+    let mut image_props = serde_json::Map::new();
+    if is_structured {
+        image_props.insert(
+            "aspect".to_string(),
+            json!({
+                "type": "string",
+                "enum": ["1:1", "16:9", "9:16", "4:3", "3:4"],
+                "description": format!(
+                    "Aspect ratio for {image_model}. If the user mentioned a ratio in \
+                     their prompt, set this field AND remove the ratio words from the \
+                     prompt — the model receives both."
+                )
+            }),
+        );
+        image_props.insert(
+            "count".to_string(),
+            json!({
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4,
+                "description":
+                    "Number of variants to generate (1-4). Only set when the user \
+                     explicitly asked for multiple variants; do not infer a count from \
+                     numeric tokens in the prompt."
+            }),
+        );
+    } else {
+        image_props.insert(
+            "input_paths".to_string(),
+            json!({
+                "type": "array",
+                "items": {"type": "string"},
+                "description": format!(
+                    "Optional reference images for {image_model} to edit / vary."
+                )
+            }),
+        );
+    }
+
+    let image_obj = if is_structured {
+        json!({
+            "type": "object",
+            "description": format!("Image options for {image_model} (Imagen-style)."),
+            "properties": Value::Object(image_props)
+        })
+    } else {
+        json!({
+            "type": "object",
+            "description": format!(
+                "Image options for {image_model} (conversational). \
+                 Aspect ratio / variant count are NOT structured parameters for this \
+                 model — keep ratio words (e.g. '4:3', 'portrait', '16:9 cinematic') \
+                 verbatim in the prompt. If the user asked for multiple variants, \
+                 call the tool repeatedly."
+            ),
+            "properties": Value::Object(image_props)
+        })
+    };
 
     FunctionDeclaration {
         name: TOOL_GENERATE_MEDIA.to_string(),
@@ -555,27 +546,11 @@ fn build_generate_media_declaration() -> FunctionDeclaration {
                     "type": "string",
                     "description": "Optional. Auto-named under data_dir/generated/ when omitted."
                 },
-                "model": {
-                    "type": "string",
-                    "description": model_description
-                },
                 "preview": {
                     "type": "boolean",
                     "description": "Image only, TTY only. Show inline preview after writing. Default true; set false for intermediate generations in a loop where the user only cares about the final asset."
                 },
-                "image": {
-                    "type": "object",
-                    "description": "Image-only options.",
-                    "properties": {
-                        "aspect":      {"type": "string",  "description": aspect_description},
-                        "count":       {"type": "integer", "description": count_description},
-                        "input_paths": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": input_paths_description
-                        }
-                    }
-                },
+                "image": image_obj,
                 "speech": {
                     "type": "object",
                     "description": "Speech-only options.",
@@ -622,7 +597,23 @@ impl LocalTool for GenerateMedia {
             .get("output_path")
             .and_then(Value::as_str)
             .unwrap_or("(auto)");
-        format!("generate_media[{kind}]({prompt}, -> {path})")
+        let mut extras: Vec<String> = Vec::new();
+        if let Some(m) = args.get("model").and_then(Value::as_str) {
+            extras.push(format!("model={m}"));
+        }
+        if let Some(sub) = args.get(kind) {
+            for (k, v) in sub.as_object().into_iter().flatten() {
+                if !v.is_null() {
+                    extras.push(format!("{k}={v}"));
+                }
+            }
+        }
+        let suffix = if extras.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", extras.join(", "))
+        };
+        format!("generate_media[{kind}]({prompt}, -> {path}){suffix}")
     }
 
     fn run(&self, args: &Value) -> Result<Value> {

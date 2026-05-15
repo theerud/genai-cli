@@ -441,6 +441,158 @@ impl LocalTool for WriteFile {
 
 // ---------- generate_media ----------
 
+/// Group known media models from the registry into the buckets the
+/// `generate_media` schema cares about. Reads the registry once and
+/// partitions image models by "structured" (Imagen) vs "conversational"
+/// (Gemini image), plus the TTS and music groups. Failure to load the
+/// registry yields empty groups — the tool still works, the schema is
+/// just less specific.
+struct MediaModelGroups {
+    image_structured: Vec<String>,
+    image_conversational: Vec<String>,
+    speech: Vec<String>,
+    music: Vec<String>,
+}
+
+fn media_model_groups() -> MediaModelGroups {
+    let Ok(registry) = crate::models::Registry::load() else {
+        return MediaModelGroups {
+            image_structured: vec![],
+            image_conversational: vec![],
+            speech: vec![],
+            music: vec![],
+        };
+    };
+    let mut image_structured = Vec::new();
+    let mut image_conversational = Vec::new();
+    for m in registry.iter_capability(crate::models::CAP_IMAGE_OUT) {
+        if m.id.starts_with("imagen") {
+            image_structured.push(m.id.clone());
+        } else {
+            image_conversational.push(m.id.clone());
+        }
+    }
+    let speech: Vec<String> = registry
+        .iter_capability(crate::models::CAP_TTS)
+        .map(|m| m.id.clone())
+        .collect();
+    let music: Vec<String> = registry
+        .iter_capability(crate::models::CAP_MUSIC_OUT)
+        .map(|m| m.id.clone())
+        .collect();
+    image_structured.sort();
+    image_conversational.sort();
+    let mut groups = MediaModelGroups {
+        image_structured,
+        image_conversational,
+        speech,
+        music,
+    };
+    groups.speech.sort();
+    groups.music.sort();
+    groups
+}
+
+fn join_or_none(ids: &[String]) -> String {
+    if ids.is_empty() {
+        "(none in registry)".to_string()
+    } else {
+        ids.join(", ")
+    }
+}
+
+fn build_generate_media_declaration() -> FunctionDeclaration {
+    let groups = media_model_groups();
+    let image_structured = join_or_none(&groups.image_structured);
+    let image_conv = join_or_none(&groups.image_conversational);
+    let speech = join_or_none(&groups.speech);
+    let music = join_or_none(&groups.music);
+
+    let description = "Generate media (image, speech, or music) and write it to disk. \
+        Returns the saved path plus metadata so subsequent tool calls (e.g. write_file \
+        embedding HTML) can reference the asset. Each invocation hits a paid API and \
+        requires user confirmation."
+        .to_string();
+
+    let model_description = format!(
+        "Optional model id or alias. Defaults to the configured default for the kind. \
+         Known model groups (case sensitive): \
+         image/structured (accepts aspect, count): {image_structured}; \
+         image/conversational (no aspect/count — describe orientation in the prompt): {image_conv}; \
+         speech: {speech}; music: {music}."
+    );
+    let aspect_description = format!(
+        "Only honored by image/structured models ({image_structured}). \
+         Ignored for image/conversational models — describe orientation in the prompt instead. \
+         Allowed values: 1:1, 16:9, 9:16, 4:3, 3:4."
+    );
+    let count_description = format!(
+        "Only honored by image/structured models ({image_structured}). \
+         Ignored for image/conversational models — call the tool again for a variant. \
+         Allowed range: 1-4."
+    );
+    let input_paths_description =
+        "Input images for edit / variation. Only useful with image/conversational models \
+         (the nano-banana family). Ignored by image/structured models."
+            .to_string();
+
+    FunctionDeclaration {
+        name: TOOL_GENERATE_MEDIA.to_string(),
+        description,
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["image", "speech", "music"],
+                    "description": "What to generate."
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Image/music: descriptive prompt. Speech: the text to read aloud."
+                },
+                "output_path": {
+                    "type": "string",
+                    "description": "Optional. Auto-named under data_dir/generated/ when omitted."
+                },
+                "model": {
+                    "type": "string",
+                    "description": model_description
+                },
+                "preview": {
+                    "type": "boolean",
+                    "description": "Image only, TTY only. Show inline preview after writing. Default false; set true for the user-facing artifact."
+                },
+                "image": {
+                    "type": "object",
+                    "description": "Image-only options.",
+                    "properties": {
+                        "aspect":      {"type": "string",  "description": aspect_description},
+                        "count":       {"type": "integer", "description": count_description},
+                        "input_paths": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": input_paths_description
+                        }
+                    }
+                },
+                "speech": {
+                    "type": "object",
+                    "description": "Speech-only options.",
+                    "properties": {
+                        "voice": {"type": "string", "description": "Prebuilt voice name."}
+                    }
+                },
+                "music": {
+                    "type": "object",
+                    "description": "Music-only options. No extra fields yet; reserved."
+                }
+            },
+            "required": ["kind", "prompt"]
+        }),
+    }
+}
+
 struct GenerateMedia;
 
 impl LocalTool for GenerateMedia {
@@ -453,66 +605,8 @@ impl LocalTool for GenerateMedia {
     }
 
     fn declaration(&self) -> FunctionDeclaration {
-        FunctionDeclaration {
-            name: TOOL_GENERATE_MEDIA.to_string(),
-            description:
-                "Generate media (image, speech, or music) and write it to disk. \
-                 Returns the saved path plus metadata so subsequent tool calls \
-                 (e.g. write_file embedding HTML) can reference the asset. \
-                 Each invocation hits a paid API and requires user confirmation."
-                    .to_string(),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "kind": {
-                        "type": "string",
-                        "enum": ["image", "speech", "music"],
-                        "description": "What to generate."
-                    },
-                    "prompt": {
-                        "type": "string",
-                        "description": "Image/music: descriptive prompt. Speech: the text to read aloud."
-                    },
-                    "output_path": {
-                        "type": "string",
-                        "description": "Optional. Auto-named under data_dir/generated/ when omitted."
-                    },
-                    "model": {
-                        "type": "string",
-                        "description": "Optional model id or alias. Falls back to the configured default for the kind."
-                    },
-                    "preview": {
-                        "type": "boolean",
-                        "description": "Image only, TTY only. Show inline preview after writing. Default false; set true for the user-facing artifact."
-                    },
-                    "image": {
-                        "type": "object",
-                        "description": "Image-only options.",
-                        "properties": {
-                            "aspect": {"type": "string", "description": "Imagen only: 1:1, 16:9, 9:16, 4:3, 3:4."},
-                            "count":  {"type": "integer", "description": "Imagen only: 1-4 variants."},
-                            "input_paths": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "Input images for edit/variation (nano-banana family)."
-                            }
-                        }
-                    },
-                    "speech": {
-                        "type": "object",
-                        "description": "Speech-only options.",
-                        "properties": {
-                            "voice": {"type": "string", "description": "Prebuilt voice name."}
-                        }
-                    },
-                    "music": {
-                        "type": "object",
-                        "description": "Music-only options. No extra fields yet; reserved."
-                    }
-                },
-                "required": ["kind", "prompt"]
-            }),
-        }
+        static DECL: std::sync::OnceLock<FunctionDeclaration> = std::sync::OnceLock::new();
+        DECL.get_or_init(build_generate_media_declaration).clone()
     }
 
     fn describe_call(&self, args: &Value) -> String {
@@ -589,8 +683,21 @@ fn run_image(
         .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
         .unwrap_or_default();
     let inputs = crate::output::load_input_images(&input_paths)?;
-    let (aspect_ratio, n) =
-        crate::output::imagen_image_params(&resolved.id, aspect.as_deref(), count);
+    let (aspect_ratio, n, mut warnings) =
+        crate::output::partition_imagen_params(&resolved.id, aspect.as_deref(), count);
+
+    // Input images only make sense for conversational image models.
+    if !input_paths.is_empty() && resolved.id.starts_with("imagen") {
+        warnings.push(format!(
+            "input_paths ignored for {}: only image/conversational models (e.g. gemini-*-image) accept edit inputs.",
+            resolved.id
+        ));
+    }
+    let inputs_for_request = if !input_paths.is_empty() && resolved.id.starts_with("imagen") {
+        Vec::new()
+    } else {
+        inputs
+    };
 
     let out_path = match output_override {
         Some(s) => s,
@@ -606,7 +713,7 @@ fn run_image(
     let req = crate::gemini::image::ImageRequest {
         model: resolved.id.clone(),
         prompt,
-        input_images: inputs,
+        input_images: inputs_for_request,
         aspect_ratio,
         count: n,
     };
@@ -628,14 +735,18 @@ fn run_image(
         })
         .collect();
     let total: usize = images.iter().map(|i| i.bytes.len()).sum();
-    Ok(json!({
+    let mut out = json!({
         "kind": "image",
         "path": out_path,
         "count": images.len(),
         "bytes": total,
         "images": dims,
         "model": resolved.id,
-    }))
+    });
+    if !warnings.is_empty() {
+        out["warnings"] = json!(warnings);
+    }
+    Ok(out)
 }
 
 fn run_speech(

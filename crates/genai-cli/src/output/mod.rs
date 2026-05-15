@@ -165,24 +165,41 @@ fn slugify(prompt: &str) -> String {
 }
 
 /// Expand a leading `~/` against `$HOME`. Anything else is passed through.
-/// Imagen-only knobs: pass `-a / -n` (or their tool equivalents) only when
-/// the model is an Imagen family one. For Gemini image models (the
-/// nano-banana family), warn and drop — those want orientation phrasing
-/// in the prompt instead.
+/// Partition `aspect` / `count` based on whether the resolved model accepts
+/// them. Returns `(aspect_ratio, count, warnings)`. The warnings list is
+/// non-empty when the caller passed structured params that don't apply —
+/// useful both for echoing into a tool response and for human-readable
+/// stderr noise.
+pub fn partition_imagen_params(
+    model_id: &str,
+    aspect: Option<&str>,
+    count: Option<u32>,
+) -> (Option<String>, Option<u32>, Vec<String>) {
+    let is_imagen = model_id.starts_with("imagen");
+    if !is_imagen && (aspect.is_some() || count.is_some()) {
+        let warn = format!(
+            "aspect/count ignored for {model_id}: only Imagen models accept them. \
+             Describe orientation / variant count in the prompt."
+        );
+        return (None, None, vec![warn]);
+    }
+    (aspect.map(String::from), count, Vec::new())
+}
+
+/// CLI variant: same partitioning, plus a stderr warning when params are
+/// dropped. Used by `-a` / `-n` on the command line and the `.image`
+/// REPL command — both human-driven entry points where the warning is
+/// useful feedback.
 pub fn imagen_image_params(
     model_id: &str,
     aspect: Option<&str>,
     count: Option<u32>,
 ) -> (Option<String>, Option<u32>) {
-    let is_imagen = model_id.starts_with("imagen");
-    if !is_imagen && (aspect.is_some() || count.is_some()) {
-        eprintln!(
-            "warning: aspect / count are honored only for Imagen models. \
-             For {model_id}, describe orientation / variant count in the prompt."
-        );
-        return (None, None);
+    let (a, c, warnings) = partition_imagen_params(model_id, aspect, count);
+    for w in &warnings {
+        eprintln!("warning: {w}");
     }
-    (aspect.map(String::from), count)
+    (a, c)
 }
 
 pub fn expand_path(s: &str) -> String {
@@ -319,6 +336,31 @@ mod tests {
     #[test]
     fn describe_empty() {
         assert_eq!(describe_image(&[]), "[empty]");
+    }
+
+    #[test]
+    fn partition_imagen_keeps_params_for_imagen_model() {
+        let (a, c, w) =
+            partition_imagen_params("imagen-4.0-generate-001", Some("16:9"), Some(2));
+        assert_eq!(a.as_deref(), Some("16:9"));
+        assert_eq!(c, Some(2));
+        assert!(w.is_empty());
+    }
+
+    #[test]
+    fn partition_imagen_drops_params_for_gemini_image_model_with_warning() {
+        let (a, c, w) =
+            partition_imagen_params("gemini-2.5-flash-image", Some("16:9"), Some(2));
+        assert!(a.is_none());
+        assert!(c.is_none());
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("gemini-2.5-flash-image"));
+    }
+
+    #[test]
+    fn partition_imagen_silent_when_nothing_to_drop() {
+        let (a, c, w) = partition_imagen_params("gemini-2.5-flash-image", None, None);
+        assert!(a.is_none() && c.is_none() && w.is_empty());
     }
 
     #[test]

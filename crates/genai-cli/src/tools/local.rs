@@ -236,11 +236,14 @@ impl LocalTool for FetchUrl {
         if !url.starts_with("http://") && !url.starts_with("https://") {
             bail!("only http(s) URLs allowed");
         }
-        // The trait is sync but we run inside a multi-thread tokio runtime;
-        // block in place and reuse the async reqwest client.
+        // Stream the response so an oversized or unbounded body can't
+        // pin memory / bandwidth — we stop reading once we've collected
+        // one byte past the cap (the extra byte lets us tell "exactly
+        // at cap" from "more than cap" without double-bookkeeping).
         let handle = tokio::runtime::Handle::current();
-        let (status, content_type, bytes) = tokio::task::block_in_place(|| {
+        let (status, content_type, bytes, truncated) = tokio::task::block_in_place(|| {
             handle.block_on(async {
+                use futures_util::StreamExt;
                 let client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
                     .user_agent(concat!("genai-cli/", env!("CARGO_PKG_VERSION")))
@@ -253,19 +256,36 @@ impl LocalTool for FetchUrl {
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or("")
                     .to_string();
-                let bytes = resp.bytes().await?;
-                Ok::<_, anyhow::Error>((status, content_type, bytes))
+                let limit = MAX_FETCH_BYTES + 1;
+                let mut buf: Vec<u8> = Vec::new();
+                let mut stream = resp.bytes_stream();
+                let mut truncated = false;
+                while let Some(chunk) = stream.next().await {
+                    let chunk = chunk?;
+                    if buf.len() + chunk.len() <= limit {
+                        buf.extend_from_slice(&chunk);
+                    } else {
+                        let room = limit.saturating_sub(buf.len());
+                        buf.extend_from_slice(&chunk[..room]);
+                        truncated = true;
+                        break;
+                    }
+                    if buf.len() >= limit {
+                        truncated = true;
+                        break;
+                    }
+                }
+                Ok::<_, anyhow::Error>((status, content_type, buf, truncated))
             })
         })?;
         let total = bytes.len();
-        let truncated = total > MAX_FETCH_BYTES;
-        let slice = if truncated { &bytes[..MAX_FETCH_BYTES] } else { &bytes[..] };
-        let body = String::from_utf8_lossy(slice).into_owned();
+        let kept = if truncated { MAX_FETCH_BYTES } else { total };
+        let body = String::from_utf8_lossy(&bytes[..kept]).into_owned();
         Ok(json!({
             "url": url,
             "status": status,
             "content_type": content_type,
-            "bytes": total,
+            "bytes": kept,
             "truncated": truncated,
             "body": body,
         }))

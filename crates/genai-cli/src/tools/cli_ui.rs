@@ -74,4 +74,32 @@ impl ToolUi for CliToolUi {
             _ => Confirmation::Deny,
         }
     }
+
+    fn continue_loop(&mut self, used: u32, max: u32) -> u32 {
+        let stdin = io::stdin();
+        if !stdin.is_terminal() {
+            // Non-interactive: clean stop at cap.
+            return 0;
+        }
+        eprint!(
+            "[loop] reached {used}/{max} iterations. continue? \
+             [c=+{max} more / N=N more / Enter=stop] "
+        );
+        let _ = io::stderr().flush();
+        let mut line = String::new();
+        if stdin.lock().read_line(&mut line).is_err() {
+            return 0;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return 0;
+        }
+        if trimmed.eq_ignore_ascii_case("c") {
+            return max;
+        }
+        match trimmed.parse::<u32>() {
+            Ok(n) if n > 0 => n,
+            _ => 0,
+        }
+    }
 }

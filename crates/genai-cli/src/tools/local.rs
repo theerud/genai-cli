@@ -7,6 +7,7 @@ pub const TOOL_READ_FILE: &str = "read_file";
 pub const TOOL_LIST_DIR: &str = "list_dir";
 pub const TOOL_FETCH_URL: &str = "fetch_url";
 pub const TOOL_EXEC: &str = "exec";
+pub const TOOL_WRITE_FILE: &str = "write_file";
 
 const MAX_READ_BYTES: usize = 256 * 1024;
 const MAX_LIST_ENTRIES: usize = 200;
@@ -14,6 +15,7 @@ const MAX_FETCH_BYTES: usize = 1024 * 1024;
 const FETCH_TIMEOUT_SECS: u64 = 15;
 const EXEC_TIMEOUT_SECS: u64 = 30;
 const EXEC_MAX_OUTPUT: usize = 64 * 1024;
+const MAX_WRITE_BYTES: usize = 10 * 1024 * 1024;
 
 /// A client-side tool that Gemini can call via function calling.
 pub trait LocalTool: Sync + Send {
@@ -44,6 +46,7 @@ pub fn builtin_locals() -> Vec<Box<dyn LocalTool>> {
         Box::new(ListDir),
         Box::new(FetchUrl),
         Box::new(Exec),
+        Box::new(WriteFile),
     ]
 }
 
@@ -322,6 +325,130 @@ impl LocalTool for Exec {
             "stdout": captured.stdout,
             "stderr": captured.stderr,
         }))
+    }
+}
+
+// ---------- write_file ----------
+
+struct WriteFile;
+
+impl LocalTool for WriteFile {
+    fn name(&self) -> &str {
+        TOOL_WRITE_FILE
+    }
+
+    fn requires_confirmation(&self) -> bool {
+        true
+    }
+
+    fn declaration(&self) -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: TOOL_WRITE_FILE.to_string(),
+            description: format!(
+                "Write UTF-8 text to a local file. Creates parent directories. \
+                 Default mode 'overwrite' replaces the file; 'append' appends to it. \
+                 Content is capped at {} KB. Each invocation requires explicit user \
+                 confirmation.",
+                MAX_WRITE_BYTES / 1024
+            ),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Absolute or tilde-expanded path to write."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "UTF-8 text to write."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["overwrite", "append"],
+                        "description": "How to write. Defaults to 'overwrite'."
+                    }
+                },
+                "required": ["path", "content"]
+            }),
+        }
+    }
+
+    fn describe_call(&self, args: &Value) -> String {
+        let path = args.get("path").and_then(Value::as_str).unwrap_or("?");
+        let bytes = args.get("content").and_then(Value::as_str).map(str::len).unwrap_or(0);
+        let mode = args.get("mode").and_then(Value::as_str).unwrap_or("overwrite");
+        format!("write_file({path}, {bytes} B, {mode})")
+    }
+
+    fn run(&self, args: &Value) -> Result<Value> {
+        let raw = str_arg(args, "path")?;
+        let content = args
+            .get("content")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("missing 'content'"))?;
+        if content.len() > MAX_WRITE_BYTES {
+            bail!(
+                "content exceeds {} KB cap ({} bytes)",
+                MAX_WRITE_BYTES / 1024,
+                content.len()
+            );
+        }
+        let mode = args.get("mode").and_then(Value::as_str).unwrap_or("overwrite");
+        let append = match mode {
+            "overwrite" => false,
+            "append" => true,
+            other => bail!("invalid mode '{other}': expected 'overwrite' or 'append'"),
+        };
+        let expanded = crate::output::expand_path(raw);
+        let path = std::path::PathBuf::from(&expanded);
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| anyhow::anyhow!("creating parent {}: {e}", parent.display()))?;
+        }
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).write(true);
+        if append {
+            opts.append(true);
+        } else {
+            opts.truncate(true);
+        }
+        use std::io::Write as _;
+        let mut f = opts
+            .open(&path)
+            .map_err(|e| anyhow::anyhow!("opening {}: {e}", path.display()))?;
+        f.write_all(content.as_bytes())?;
+        let total = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        Ok(json!({
+            "path": path.display().to_string(),
+            "bytes": content.len(),
+            "total_bytes": total,
+            "mode": mode,
+        }))
+    }
+
+    fn normalize_for_policy(&self, args: &Value) -> Value {
+        // Canonicalize against the parent directory when the file doesn't
+        // exist yet — that's the case the policy actually needs to see.
+        let mut out = args.clone();
+        if let Some(p) = out.get("path").and_then(Value::as_str) {
+            let expanded = crate::output::expand_path(p);
+            let path = std::path::PathBuf::from(&expanded);
+            let resolved = match path.parent() {
+                Some(parent) if !parent.as_os_str().is_empty() => match std::fs::canonicalize(parent)
+                {
+                    Ok(canon_parent) => {
+                        let file_name = path.file_name().map(|f| f.to_owned()).unwrap_or_default();
+                        canon_parent.join(file_name).display().to_string()
+                    }
+                    Err(_) => expanded,
+                },
+                _ => expanded,
+            };
+            out["path"] = json!(resolved);
+        }
+        out
     }
 }
 

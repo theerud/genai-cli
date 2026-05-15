@@ -13,6 +13,31 @@ pub struct Role {
     pub thinking_level: Option<String>,
     #[serde(default)]
     pub tools: Vec<String>,
+    /// `"chat"` (default) or `"loop"`. In `"loop"` mode, the role can run
+    /// multiple tool-call iterations under a single user prompt, and only
+    /// the user prompt and final answer are kept in session history.
+    pub mode: Option<String>,
+    /// Cap on tool-loop iterations. Applies to both chat and loop modes;
+    /// in interactive loop mode the user is prompted to extend the budget
+    /// when the cap is hit.
+    pub max_iterations: Option<u32>,
+}
+
+pub const DEFAULT_MAX_ITERATIONS: u32 = 8;
+
+impl Role {
+    pub fn is_loop_mode(&self) -> bool {
+        matches!(self.mode.as_deref(), Some("loop"))
+    }
+}
+
+/// Resolve the iteration budget: explicit CLI override wins, then the
+/// role's `max_iterations`, then the global default.
+pub fn iter_budget(cli_override: Option<u32>, role: Option<&Role>) -> u32 {
+    cli_override
+        .or_else(|| role.and_then(|r| r.max_iterations))
+        .unwrap_or(DEFAULT_MAX_ITERATIONS)
+        .max(1)
 }
 
 pub fn roles_dir() -> Result<PathBuf> {

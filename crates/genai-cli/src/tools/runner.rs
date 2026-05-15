@@ -8,23 +8,35 @@ use crate::gemini::types::{Content, FunctionResponse, GenerationConfig, Part};
 
 use super::{build_request_tools, lookup_local};
 
-pub const MAX_TOOL_ITERATIONS: usize = 8;
-
 pub struct ToolLoopRequest {
     pub model: String,
     pub contents: Vec<Content>,
     pub system_instruction: Option<String>,
     pub generation_config: Option<GenerationConfig>,
     pub enabled_tools: Vec<String>,
+    /// Initial iteration budget.
+    pub max_iterations: u32,
+    /// True when invoked from a role with `mode = "loop"`. Controls the
+    /// continue-prompt behavior and the trailer added when the loop stops
+    /// at the cap.
+    pub loop_mode: bool,
 }
 
 pub struct ToolLoopOutcome {
     /// Assistant and tool-response messages produced during the loop, in order.
-    /// The final entry is always the assistant text message.
+    /// The final entry is the assistant text message (possibly synthetic, if
+    /// the loop stopped at the iteration cap).
     pub exchange: Vec<Content>,
     pub final_text: String,
     pub prompt_tokens: Option<u32>,
     pub output_tokens: Option<u32>,
+    /// Iterations actually consumed.
+    #[allow(dead_code)]
+    pub iterations: u32,
+    /// True when the loop hit the iteration cap. Reserved for callers that
+    /// want to differentiate cap-stop vs natural completion.
+    #[allow(dead_code)]
+    pub capped: bool,
 }
 
 pub enum Confirmation {
@@ -32,6 +44,8 @@ pub enum Confirmation {
     Deny,
 }
 
+/// How many additional iterations the user wants to grant when the loop
+/// hits the cap. `0` (or non-interactive default) means stop.
 pub trait ToolUi {
     fn announce_call(&mut self, name: &str, summary: &str);
     fn announce_result(&mut self, name: &str, ok: bool, preview: &str);
@@ -39,6 +53,12 @@ pub trait ToolUi {
     /// the loop to feed a synthetic error response back to the model instead
     /// of executing the tool.
     fn confirm(&mut self, name: &str, summary: &str) -> Confirmation;
+    /// Called when the loop hits its iteration cap in `loop_mode`.
+    /// Return the number of extra iterations to grant; `0` stops the loop.
+    fn continue_loop(&mut self, used: u32, max: u32) -> u32 {
+        let _ = (used, max);
+        0
+    }
 }
 
 pub async fn run(
@@ -48,13 +68,34 @@ pub async fn run(
 ) -> Result<ToolLoopOutcome> {
     let tools = build_request_tools(&req.enabled_tools);
     let mut contents = req.contents;
-    // The caller-visible exchange is everything we append after this point.
     let exchange_start = contents.len();
-    let mut last_prompt;
-    let mut last_output;
+    let mut last_prompt = None;
+    let mut last_output = None;
+    let mut budget: u32 = req.max_iterations.max(1);
+    let mut iter: u32 = 0;
 
-    for iter in 0..MAX_TOOL_ITERATIONS {
-        debug!(iteration = iter, "tool loop iteration");
+    loop {
+        if iter >= budget {
+            if req.loop_mode {
+                let extra = ui.continue_loop(iter, budget);
+                if extra == 0 {
+                    return Ok(stopped_at_cap(
+                        &mut contents,
+                        exchange_start,
+                        iter,
+                        budget,
+                        last_prompt,
+                        last_output,
+                    ));
+                }
+                budget = budget.saturating_add(extra);
+                continue;
+            }
+            return Err(anyhow!(
+                "tool loop exceeded {budget} iterations without a final answer"
+            ));
+        }
+        debug!(iteration = iter, budget, "tool loop iteration");
         let chat_req = ChatRequest {
             model: &req.model,
             contents: &contents,
@@ -63,7 +104,8 @@ pub async fn run(
             tools: tools.as_deref(),
         };
         let resp = {
-            let _s = crate::spinner::Spinner::start("thinking...");
+            let label = format!("[{}/{budget}] thinking...", iter + 1);
+            let _s = crate::spinner::Spinner::start(&label);
             client.generate_content(chat_req).await?
         };
         last_prompt = resp.prompt_tokens;
@@ -90,14 +132,12 @@ pub async fn run(
                 final_text: text,
                 prompt_tokens: last_prompt,
                 output_tokens: last_output,
+                iterations: iter + 1,
+                capped: false,
             });
         }
         contents.push(model_content);
 
-        // Execute each requested function call, in order, and append a single
-        // user message containing all functionResponse parts. Gemini accepts
-        // either one response per message or batched responses; batching keeps
-        // the turn count down.
         let mut response_parts = Vec::with_capacity(calls.len());
         for call in calls {
             let Some(tool) = lookup_local(&call.name) else {
@@ -116,10 +156,6 @@ pub async fn run(
             debug!(tool = %call.name, %summary, "tool call");
             ui.announce_call(&call.name, &summary);
 
-            // Resolve policy against the tool-normalized args (canonical
-            // paths, etc.). The result decides whether to run, refuse, or
-            // prompt — overriding the tool's `requires_confirmation` only
-            // for explicit allow/deny.
             let normalized = tool.normalize_for_policy(&call.args);
             let outcome = super::policy::evaluate(&call.name, &normalized);
             debug!(tool = %call.name, decision = ?outcome.decision, source = %outcome.source.label(), "policy");
@@ -133,15 +169,15 @@ pub async fn run(
                     v
                 }
                 crate::config::Decision::Allow => {
-                    execute_and_audit(&call.name, tool, &call.args, ui)
+                    execute_and_audit(&call.name, tool, &call.args, iter + 1, budget, ui)
                 }
                 crate::config::Decision::Prompt => {
                     if !tool.requires_confirmation() {
-                        execute_and_audit(&call.name, tool, &call.args, ui)
+                        execute_and_audit(&call.name, tool, &call.args, iter + 1, budget, ui)
                     } else {
                         match ui.confirm(&call.name, &summary) {
                             Confirmation::Allow => {
-                                execute_and_audit(&call.name, tool, &call.args, ui)
+                                execute_and_audit(&call.name, tool, &call.args, iter + 1, budget, ui)
                             }
                             Confirmation::Deny => {
                                 let v = serde_json::json!({
@@ -173,11 +209,50 @@ pub async fn run(
             role: Some("user".to_string()),
             parts: response_parts,
         });
+        iter += 1;
     }
+}
 
-    Err(anyhow!(
-        "tool loop exceeded {MAX_TOOL_ITERATIONS} iterations without a final answer"
-    ))
+/// Build the outcome returned when a loop-mode invocation hits the cap
+/// and the user chose to stop. Appends a synthetic assistant trailer
+/// summarizing the cap; the caller still gets a coherent final text.
+fn stopped_at_cap(
+    contents: &mut Vec<Content>,
+    exchange_start: usize,
+    iterations: u32,
+    budget: u32,
+    prompt_tokens: Option<u32>,
+    output_tokens: Option<u32>,
+) -> ToolLoopOutcome {
+    // Take the last assistant text we saw, if any, and append a trailer.
+    let mut last_text = String::new();
+    for c in contents.iter().rev() {
+        if c.role.as_deref() == Some("model") {
+            last_text = collect_text(c);
+            if !last_text.is_empty() {
+                break;
+            }
+        }
+    }
+    let trailer = format!("\n\n_[loop ended at {iterations}/{budget} iterations]_");
+    let final_text = if last_text.is_empty() {
+        format!("[loop ended at {iterations}/{budget} iterations]")
+    } else {
+        format!("{last_text}{trailer}")
+    };
+    contents.push(Content {
+        role: Some("model".to_string()),
+        parts: vec![Part::Text { text: final_text.clone() }],
+    });
+    let exchange = contents.split_off(exchange_start);
+    ToolLoopOutcome {
+        exchange,
+        final_text,
+        prompt_tokens,
+        output_tokens,
+        iterations,
+        capped: true,
+    }
 }
 
 /// Run the tool, surface the result to the UI, and append an audit-log
@@ -189,9 +264,11 @@ fn execute_and_audit(
     name: &str,
     tool: &dyn super::LocalTool,
     args: &Value,
+    iter: u32,
+    budget: u32,
     ui: &mut dyn ToolUi,
 ) -> Value {
-    let spinner = crate::spinner::Spinner::start(&format!("running {name}..."));
+    let spinner = crate::spinner::Spinner::start(&format!("[{iter}/{budget}] running {name}..."));
     let outcome = tool.run(args);
     drop(spinner);
     match outcome {

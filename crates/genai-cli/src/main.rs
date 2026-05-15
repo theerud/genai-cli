@@ -66,7 +66,7 @@ async fn real_main() -> Result<()> {
 
     match cli.prompt_text() {
         Some(prompt) => run_one_shot(&cfg, &cli, prompt).await,
-        None => run_repl(cfg, cli.session.as_deref(), cli.role.as_deref()).await,
+        None => run_repl(cfg, cli.session.as_deref(), cli.role.as_deref(), cli.max_iter).await,
     }
 }
 
@@ -274,6 +274,7 @@ async fn run_repl(
     cfg: config::Config,
     session_name: Option<&str>,
     role_name: Option<&str>,
+    max_iter: Option<u32>,
 ) -> Result<()> {
     let api_key = cfg.require_api_key()?;
     let client = Client::new(api_key.to_string(), cfg.api_base().to_string())?;
@@ -299,7 +300,8 @@ async fn run_repl(
         (None, Vec::new())
     };
 
-    let state = repl::ReplState::new(cfg, client, registry, db, active, history, role);
+    let state =
+        repl::ReplState::new(cfg, client, registry, db, active, history, role, max_iter);
     repl::run(state).await
 }
 
@@ -379,6 +381,8 @@ async fn run_one_shot_chat(
     contents.push(user_msg.clone());
 
     if tools::has_local(&enabled_tools) {
+        let loop_mode = role.map(|r| r.is_loop_mode()).unwrap_or(false);
+        let max_iterations = role::iter_budget(cli.max_iter, role);
         return run_one_shot_with_tools(
             cli,
             cfg,
@@ -392,6 +396,8 @@ async fn run_one_shot_chat(
             attachments,
             active,
             db_opt,
+            loop_mode,
+            max_iterations,
         )
         .await;
     }
@@ -511,6 +517,8 @@ async fn run_one_shot_with_tools(
     attachments: Vec<session::attachment::Attachment>,
     active: Option<session::ActiveSession>,
     db_opt: Option<session::db::Database>,
+    loop_mode: bool,
+    max_iterations: u32,
 ) -> Result<()> {
     let req = tools::runner::ToolLoopRequest {
         model: resolved.id.clone(),
@@ -518,6 +526,8 @@ async fn run_one_shot_with_tools(
         system_instruction: system_prompt,
         generation_config: build_generation_config(cfg, &resolved),
         enabled_tools,
+        max_iterations,
+        loop_mode,
     };
     let mut ui = tools::cli_ui::CliToolUi::new();
     let outcome = tools::runner::run(client, req, &mut ui).await?;
@@ -545,6 +555,11 @@ async fn run_one_shot_with_tools(
         }
     }
 
+    let visibility = if loop_mode && !outcome.exchange.is_empty() {
+        session::db::ChainVisibility::InternalUntil(outcome.exchange.len() - 1)
+    } else {
+        session::db::ChainVisibility::AllVisible
+    };
     if let (Some(s), Some(mut db)) = (active.as_ref(), db_opt)
         && let Err(e) = persist_one_shot_exchange(
             &mut db,
@@ -553,6 +568,7 @@ async fn run_one_shot_with_tools(
             &outcome.exchange,
             &resolved.id,
             &attachments,
+            visibility,
         )
     {
         eprintln!("warning: failed to persist turn: {e}");
@@ -568,9 +584,10 @@ fn persist_one_shot_exchange(
     chain: &[Content],
     model_id: &str,
     attachments: &[session::attachment::Attachment],
+    visibility: session::db::ChainVisibility,
 ) -> Result<()> {
     let hashes = session::persist_attachments(db, attachments)?;
-    db.commit_exchange(session_id, user, chain, Some(model_id), &hashes)
+    db.commit_exchange_visibility(session_id, user, chain, Some(model_id), &hashes, visibility)
 }
 
 fn build_generation_config(

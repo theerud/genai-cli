@@ -62,5 +62,6 @@ Shipped in this iteration of work:
 - Audit log + retention
 - Per-session trust state
 - Spinner during silent waits
+- Loop-mode roles (multi-iteration tool runs under one prompt; `write_file` built-in; `--max-iter`)
 
 See git log for the full sequence.

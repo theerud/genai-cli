@@ -32,8 +32,9 @@ tools = ["google_search", "url_context"]
 | `list_dir` | `path` | Up to 200 entries with name + type + size |
 | `fetch_url` | `url` | http(s) GET, up to 1 MB |
 | `exec` | `command` | `sh -c …`; **subject to confirmation** |
+| `write_file` | `path`, `content`, `mode?` | Up to 10 MB UTF-8 text; `overwrite` (default) or `append`; **subject to confirmation** |
 
-Confirmable tools (today, just `exec`) prompt `[y/N/A]` per call. `A` trusts the tool for the rest of the REPL session — see `.trust` below.
+Confirmable tools (`exec`, `write_file`) prompt `[y/N/A]` per call. `A` trusts the tool for the rest of the REPL session — see `.trust` below.
 
 ## User-defined tools
 
@@ -68,10 +69,23 @@ When any local tool is enabled, the chat turn runs as:
 
 1. Send `generateContent` with `tools.functionDeclarations` for the local tools (plus any built-ins).
 2. If the response contains `functionCall` parts, execute each locally and append a single `user` message holding all `functionResponse` parts. Repeat.
-3. Stop when the model returns a text-only response, or bail at `MAX_TOOL_ITERATIONS = 8`.
+3. Stop when the model returns a text-only response, or bail at the iteration cap (default 8, overridable per role via `max_iterations`, per invocation via `--max-iter`).
 4. Persist the full exchange (user → model+tool back-and-forth → final text) atomically in a single transaction with one `turn_id`.
 
 `.undo` removes the whole exchange. `.retry` removes it then re-asks the user prompt that started it.
+
+### Loop mode
+
+A role can declare `mode = "loop"` (see [config.md](config.md#roles)) so a single user prompt can drive many tool-call iterations — research agents, scripted file edits, etc.
+
+- The spinner shows `[N/MAX] thinking…` / `[N/MAX] running <tool>…` so you can see where the loop is.
+- Only the user prompt and the **final** assistant text are kept in session history. Intermediate function calls / tool responses are stored with `loop_internal = 1` and excluded from `messages_to_contents`, so the next turn isn't polluted by working memory. `.undo` still removes the whole exchange.
+- When the cap is reached interactively, you're asked:
+  ```
+  [loop] reached 8/8 iterations. continue? [c=+8 more / N=N more / Enter=stop]
+  ```
+  `c` grants another full budget; a number grants that many; empty stops with a trailer like `_[loop ended at 8/8 iterations]_`.
+- Non-interactive runs stop cleanly at the cap (same trailer, no prompt).
 
 ## Policy
 

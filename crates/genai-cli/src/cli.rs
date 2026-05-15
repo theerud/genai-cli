@@ -27,6 +27,9 @@ pub struct Cli {
     #[arg(long, help = "Disable streaming output")]
     pub no_stream: bool,
 
+    #[arg(long = "max-iter", help = "Override role's tool-loop iteration cap")]
+    pub max_iter: Option<u32>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 

@@ -33,6 +33,18 @@ pub struct MessageRecord {
     pub created_at: String,
 }
 
+/// Which assistant-side messages should be hidden from future session
+/// context. `Visible` = persist normally. `LoopInternal` = persist with
+/// the `loop_internal` flag so `load_messages` excludes them by default;
+/// `.undo` still removes them along with the rest of the turn.
+#[derive(Debug, Clone, Copy)]
+pub enum ChainVisibility {
+    AllVisible,
+    /// First N chain entries are loop_internal; rest are visible.
+    /// Typical loop case: every entry except the last (final answer) is internal.
+    InternalUntil(usize),
+}
+
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS sessions (
     id            INTEGER PRIMARY KEY,
@@ -46,14 +58,15 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE TABLE IF NOT EXISTS messages (
-    id          INTEGER PRIMARY KEY,
-    session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    seq         INTEGER NOT NULL,
-    turn_id     INTEGER NOT NULL DEFAULT 0,
-    role        TEXT NOT NULL,
-    parts       TEXT NOT NULL,
-    token_count INTEGER,
-    created_at  TEXT NOT NULL,
+    id            INTEGER PRIMARY KEY,
+    session_id    INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    seq           INTEGER NOT NULL,
+    turn_id       INTEGER NOT NULL DEFAULT 0,
+    role          TEXT NOT NULL,
+    parts         TEXT NOT NULL,
+    token_count   INTEGER,
+    created_at    TEXT NOT NULL,
+    loop_internal INTEGER NOT NULL DEFAULT 0,
     UNIQUE(session_id, seq)
 );
 
@@ -74,7 +87,7 @@ CREATE TABLE IF NOT EXISTS message_attachments (
 );
 "#;
 
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 impl Database {
     pub fn open(path: &Path) -> Result<Self> {
@@ -96,6 +109,9 @@ impl Database {
             }
             if version < 3 {
                 migrate_v2_to_v3(&conn)?;
+            }
+            if version < 4 {
+                migrate_v3_to_v4(&conn)?;
             }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -267,7 +283,7 @@ impl Database {
     pub fn load_messages(&self, session_id: i64) -> Result<Vec<MessageRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT seq, role, parts, created_at FROM messages \
-             WHERE session_id = ?1 ORDER BY seq ASC",
+             WHERE session_id = ?1 AND loop_internal = 0 ORDER BY seq ASC",
         )?;
         let rows = stmt
             .query_map(params![session_id], |r| {
@@ -320,20 +336,55 @@ impl Database {
         model: Option<&str>,
         attachment_hashes: &[String],
     ) -> Result<()> {
+        self.commit_exchange_visibility(
+            session_id,
+            user,
+            chain,
+            model,
+            attachment_hashes,
+            ChainVisibility::AllVisible,
+        )
+    }
+
+    /// Like `commit_exchange`, but allows marking part of the chain as
+    /// `loop_internal` so future turns don't see it. The user message and
+    /// the visible suffix of the chain remain in normal history.
+    pub fn commit_exchange_visibility(
+        &mut self,
+        session_id: i64,
+        user: &Content,
+        chain: &[Content],
+        model: Option<&str>,
+        attachment_hashes: &[String],
+        visibility: ChainVisibility,
+    ) -> Result<()> {
         let tx = self.conn.transaction()?;
         let next_seq = next_seq(&tx, session_id)?;
         let next_turn = next_turn_id(&tx, session_id)?;
         let now = now_iso();
 
-        let user_id = insert_message(&tx, session_id, next_seq, next_turn, user, &now)?;
+        let user_id = insert_message(&tx, session_id, next_seq, next_turn, user, &now, false)?;
         for hash in attachment_hashes {
             tx.execute(
                 "INSERT OR IGNORE INTO message_attachments (message_id, attachment_hash) VALUES (?1, ?2)",
                 params![user_id, hash],
             )?;
         }
+        let internal_until = match visibility {
+            ChainVisibility::AllVisible => 0,
+            ChainVisibility::InternalUntil(n) => n.min(chain.len()),
+        };
         for (i, msg) in chain.iter().enumerate() {
-            insert_message(&tx, session_id, next_seq + 1 + i as i64, next_turn, msg, &now)?;
+            let is_internal = i < internal_until;
+            insert_message(
+                &tx,
+                session_id,
+                next_seq + 1 + i as i64,
+                next_turn,
+                msg,
+                &now,
+                is_internal,
+            )?;
         }
         tx.execute(
             "UPDATE sessions SET updated_at = ?1, model = COALESCE(?2, model) WHERE id = ?3",
@@ -393,6 +444,20 @@ impl Database {
         tx.commit()?;
         Ok(removed)
     }
+}
+
+fn migrate_v3_to_v4(conn: &Connection) -> Result<()> {
+    let has_col: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name = 'loop_internal'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_col == 0 {
+        conn.execute_batch(
+            "ALTER TABLE messages ADD COLUMN loop_internal INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    Ok(())
 }
 
 fn migrate_v2_to_v3(conn: &Connection) -> Result<()> {
@@ -464,13 +529,14 @@ fn insert_message(
     turn_id: i64,
     msg: &Content,
     now: &str,
+    loop_internal: bool,
 ) -> Result<i64> {
     let role = msg.role.as_deref().unwrap_or("user");
     let parts_json = serde_json::to_string(&msg.parts)?;
     tx.execute(
-        "INSERT INTO messages (session_id, seq, turn_id, role, parts, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![session_id, seq, turn_id, role, parts_json, now],
+        "INSERT INTO messages (session_id, seq, turn_id, role, parts, created_at, loop_internal) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![session_id, seq, turn_id, role, parts_json, now, loop_internal as i64],
     )?;
     Ok(tx.last_insert_rowid())
 }
@@ -589,6 +655,34 @@ mod tests {
 
         // Undo on an empty session returns 0.
         assert_eq!(db.pop_last_turn(s.id).unwrap(), 0);
+    }
+
+    #[test]
+    fn loop_internal_hidden_from_load() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.db");
+        let mut db = Database::open(&path).unwrap();
+        let s = db.create_session("loop", None, None).unwrap();
+        let model_call = assistant("calling tool");
+        let tool_resp = user("tool result");
+        let final_text = assistant("answer");
+        db.commit_exchange_visibility(
+            s.id,
+            &user("go"),
+            &[model_call, tool_resp, final_text],
+            None,
+            &[],
+            ChainVisibility::InternalUntil(2),
+        )
+        .unwrap();
+        // load_messages filters loop_internal=1 — user + final answer only.
+        let visible = db.load_messages(s.id).unwrap();
+        assert_eq!(visible.len(), 2);
+        assert_eq!(visible[0].role, "user");
+        assert_eq!(visible[1].role, "model");
+        // .undo still removes the full turn (4 rows).
+        let removed = db.pop_last_turn(s.id).unwrap();
+        assert_eq!(removed, 4);
     }
 
     #[test]

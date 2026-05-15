@@ -40,6 +40,9 @@ pub struct ReplState {
     pub active_tools: Vec<String>,
     pub tool_ui: tools::cli_ui::CliToolUi,
     pub usage: UsageStats,
+    /// CLI `--max-iter` override, if supplied. Takes precedence over the
+    /// active role's `max_iterations`.
+    pub max_iter_override: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -71,6 +74,7 @@ impl UsageStats {
 }
 
 impl ReplState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         cfg: Config,
         client: Client,
@@ -79,6 +83,7 @@ impl ReplState {
         session: Option<ActiveSession>,
         history: Vec<Content>,
         role: Option<Role>,
+        max_iter_override: Option<u32>,
     ) -> Self {
         let default_id = cfg.default_chat_model().to_string();
         let model_id = role
@@ -126,6 +131,7 @@ impl ReplState {
             active_tools,
             tool_ui: tools::cli_ui::CliToolUi::new(),
             usage: UsageStats::default(),
+            max_iter_override,
         }
     }
 

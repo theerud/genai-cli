@@ -104,9 +104,10 @@ fn persist_exchange(
     chain: &[Content],
     model_id: &str,
     attachments: &[crate::session::attachment::Attachment],
+    visibility: crate::session::db::ChainVisibility,
 ) -> Result<()> {
     let hashes = crate::session::persist_attachments(db, attachments)?;
-    db.commit_exchange(session_id, user, chain, Some(model_id), &hashes)
+    db.commit_exchange_visibility(session_id, user, chain, Some(model_id), &hashes, visibility)
 }
 
 async fn chat_turn_with_tools(
@@ -115,12 +116,17 @@ async fn chat_turn_with_tools(
     user_msg: Content,
     attachments: Vec<crate::session::attachment::Attachment>,
 ) -> Result<()> {
+    let loop_mode = state.role.as_ref().map(|r| r.is_loop_mode()).unwrap_or(false);
+    let max_iterations =
+        crate::role::iter_budget(state.max_iter_override, state.role.as_ref());
     let req = tools::runner::ToolLoopRequest {
         model: state.model.id.clone(),
         contents,
         system_instruction: state.system_prompt.clone(),
         generation_config: state.build_generation_config(),
         enabled_tools: state.active_tools.clone(),
+        max_iterations,
+        loop_mode,
     };
     let outcome = match tools::runner::run(&state.client, req, &mut state.tool_ui).await {
         Ok(o) => o,
@@ -138,6 +144,13 @@ async fn chat_turn_with_tools(
     renderer.push(&outcome.final_text);
     renderer.finish();
 
+    let visibility = if loop_mode && !outcome.exchange.is_empty() {
+        // Hide every chain entry except the final assistant text from future
+        // session context.
+        crate::session::db::ChainVisibility::InternalUntil(outcome.exchange.len() - 1)
+    } else {
+        crate::session::db::ChainVisibility::AllVisible
+    };
     if let Some(s) = &state.session {
         let session_id = s.id();
         if let Err(e) = persist_exchange(
@@ -147,12 +160,21 @@ async fn chat_turn_with_tools(
             &outcome.exchange,
             &state.model.id,
             &attachments,
+            visibility,
         ) {
             eprintln!("warning: failed to persist turn (in-memory history kept): {e}");
         }
     }
     state.history.push(user_msg);
-    state.history.extend(outcome.exchange);
+    if loop_mode {
+        // Mirror the persistence rule in in-memory history: only the final
+        // assistant text stays, so the next turn sees a clean transcript.
+        if let Some(final_msg) = outcome.exchange.into_iter().last() {
+            state.history.push(final_msg);
+        }
+    } else {
+        state.history.extend(outcome.exchange);
+    }
     state.pending_files.clear();
     state.usage.accumulate(
         outcome.prompt_tokens,

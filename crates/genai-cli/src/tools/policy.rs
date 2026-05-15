@@ -163,7 +163,7 @@ const BUILTIN_DENY_PATHS: &[&str] = &[
 const BUILTIN_DENY_HOSTS: &[&str] = &["localhost", "::1"];
 
 fn builtin_deny_match(tool: &str, args: &Value) -> Option<&'static str> {
-    if matches!(tool, "read_file" | "list_dir")
+    if matches!(tool, "read_file" | "list_dir" | "write_file")
         && let Some(path) = args.get("path").and_then(Value::as_str)
     {
         let expanded = crate::output::expand_path(path);

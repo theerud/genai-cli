@@ -109,6 +109,23 @@ enabled = true
 max_lines = 5000             # soft cap; trims in place at +10%
 ```
 
+## Roles
+
+Each role lives in `<config_dir>/roles/<name>.toml` and bundles a model, system prompt, params, and tools. Loaded via `-r <name>` on the CLI or `.role <name>` in the REPL.
+
+```toml
+# ~/.config/genai/roles/researcher.toml
+model = "gemini-2.5-pro"
+system_prompt = "You are a research agent..."
+tools = ["google_search", "url_context", "fetch_url", "write_file"]
+
+# Optional: drive multi-step tool workflows under one user prompt.
+mode = "loop"                  # "chat" (default) | "loop"
+max_iterations = 20            # default 8; --max-iter overrides per invocation
+```
+
+In `loop` mode only the user prompt and the final assistant text are kept in session history — intermediate function calls and tool responses stay out of future context. See [tools.md#loop-mode](tools.md#loop-mode) for the full behavior.
+
 ## `thinking_level`
 
 Maps to a Gemini thinking budget:

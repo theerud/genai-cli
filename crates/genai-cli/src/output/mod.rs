@@ -165,6 +165,26 @@ fn slugify(prompt: &str) -> String {
 }
 
 /// Expand a leading `~/` against `$HOME`. Anything else is passed through.
+/// Imagen-only knobs: pass `-a / -n` (or their tool equivalents) only when
+/// the model is an Imagen family one. For Gemini image models (the
+/// nano-banana family), warn and drop — those want orientation phrasing
+/// in the prompt instead.
+pub fn imagen_image_params(
+    model_id: &str,
+    aspect: Option<&str>,
+    count: Option<u32>,
+) -> (Option<String>, Option<u32>) {
+    let is_imagen = model_id.starts_with("imagen");
+    if !is_imagen && (aspect.is_some() || count.is_some()) {
+        eprintln!(
+            "warning: aspect / count are honored only for Imagen models. \
+             For {model_id}, describe orientation / variant count in the prompt."
+        );
+        return (None, None);
+    }
+    (aspect.map(String::from), count)
+}
+
 pub fn expand_path(s: &str) -> String {
     if let Some(rest) = s.strip_prefix("~/")
         && let Ok(home) = std::env::var("HOME")

@@ -33,8 +33,30 @@ tools = ["google_search", "url_context"]
 | `fetch_url` | `url` | http(s) GET, up to 1 MB |
 | `exec` | `command` | `sh -c …`; **subject to confirmation** |
 | `write_file` | `path`, `content`, `mode?` | Up to 10 MB UTF-8 text; `overwrite` (default) or `append`; **subject to confirmation** |
+| `generate_media` | `kind`, `prompt`, `output_path?`, `model?`, `preview?`, `image?`, `speech?`, `music?` | One tool for image / speech / music generation; auto-path under `data_dir/generated/`; **subject to confirmation** |
 
-Confirmable tools (`exec`, `write_file`) prompt `[y/N/A]` per call. `A` trusts the tool for the rest of the REPL session — see `.trust` below.
+Confirmable tools (`exec`, `write_file`, `generate_media`) prompt `[y/N/A]` per call. `A` trusts the tool for the rest of the REPL session — see `.trust` below.
+
+### `generate_media` shape
+
+```jsonc
+{
+  "kind":        "image" | "speech" | "music",
+  "prompt":      "...",                  // for speech, this is the text to read
+  "output_path": "/abs/or/~/path.ext",   // optional; auto-named when omitted
+  "model":       "imagen-4...",          // optional; falls back to cfg defaults
+  "preview":     false,                  // image only, TTY only; default off
+
+  "image":  { "aspect": "16:9", "count": 2, "input_paths": ["ref.png"] },
+  "speech": { "voice": "Kore" },
+  "music":  { }
+}
+```
+
+- `aspect` / `count` are Imagen-only; warn-and-drop for nano-banana models, same as the CLI.
+- `input_paths` enables nano-banana edit/variation workflows.
+- `preview: true` renders the image inline (Kitty / iTerm2) — useful when the image is the user-facing artifact; default `false` keeps intermediate generations off-screen.
+- Multi-speaker TTS (Gemini 2.5) and Lyria 3's image input / lyrics / tempo are not yet wired through this tool; they will land in a follow-up slice under the same tool name.
 
 ## User-defined tools
 

@@ -55,10 +55,82 @@ pub fn tail(n: usize) -> Vec<String> {
     lines[start..].iter().map(|s| s.to_string()).collect()
 }
 
+/// Per-tool list of argument names whose values are always replaced
+/// with a `"<redacted, N bytes>"` placeholder before logging — for
+/// fields that carry whole-file payloads or could carry secrets.
+const REDACT_BY_TOOL: &[(&str, &[&str])] = &[
+    ("write_file", &["content"]),
+];
+
+/// Case-insensitive substrings that mark a field as secret regardless
+/// of which tool produced it. Catches user-defined tools that accept
+/// API keys, tokens, passwords, etc.
+const SECRET_NAME_SUBSTRINGS: &[&str] = &[
+    "password", "passwd", "secret", "token", "api_key", "apikey", "credential",
+];
+
+/// Any individual string field longer than this is replaced with its
+/// head + "<truncated, N bytes total>" tail. Keeps the audit line
+/// readable and bounded in size.
+const MAX_FIELD_BYTES: usize = 4096;
+
+/// Strip / cap fields likely to leak content or secrets. Operates on
+/// the top-level object only — secrets in deeply nested user-tool
+/// shapes will still show up, but the common shapes (write_file.content,
+/// flat user-tool args) are covered.
+fn redact_args(tool: &str, args: &Value) -> Value {
+    let mut redacted = args.clone();
+    if let Value::Object(map) = &mut redacted {
+        let tool_fields: &[&str] = REDACT_BY_TOOL
+            .iter()
+            .find(|(t, _)| *t == tool)
+            .map(|(_, f)| *f)
+            .unwrap_or(&[]);
+        for (k, v) in map.iter_mut() {
+            let key_lower = k.to_ascii_lowercase();
+            let force = tool_fields.contains(&k.as_str())
+                || SECRET_NAME_SUBSTRINGS.iter().any(|p| key_lower.contains(p));
+            *v = redact_value(v, force);
+        }
+    }
+    redacted
+}
+
+fn redact_value(v: &Value, force: bool) -> Value {
+    if force {
+        let n = match v {
+            Value::String(s) => s.len(),
+            other => other.to_string().len(),
+        };
+        return json!(format!("<redacted, {n} bytes>"));
+    }
+    if let Value::String(s) = v
+        && s.len() > MAX_FIELD_BYTES
+    {
+        let head_end = utf8_floor(s, MAX_FIELD_BYTES);
+        return json!(format!("{}…<truncated, {} bytes total>", &s[..head_end], s.len()));
+    }
+    v.clone()
+}
+
+/// Largest valid UTF-8 boundary `<= cap` in `s`. Avoids slicing inside
+/// a multi-byte char when we truncate.
+fn utf8_floor(s: &str, cap: usize) -> usize {
+    if s.len() <= cap {
+        return s.len();
+    }
+    let mut idx = cap;
+    while idx > 0 && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
 /// Record a tool invocation. `result` is one of `"ok"`, `"err"`,
 /// `"denied"`. `preview` is a short human-readable summary already shown
 /// to the user; we replay it into the audit line so the log is
-/// self-contained.
+/// self-contained. Argument values are redacted / truncated before
+/// serialization — see `redact_args`.
 pub fn log(tool: &str, args: &Value, result: &str, preview: &str) {
     let s = settings();
     if !s.enabled {
@@ -70,7 +142,7 @@ pub fn log(tool: &str, args: &Value, result: &str, preview: &str) {
     let entry = json!({
         "ts": now_iso(),
         "tool": tool,
-        "args": args,
+        "args": redact_args(tool, args),
         "result": result,
         "preview": preview,
     });
@@ -153,6 +225,52 @@ fn civil_from_days(z: i64) -> (i32, u32, u32) {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn redacts_write_file_content() {
+        let args = json!({"path": "/tmp/foo", "content": "the quick brown fox"});
+        let red = redact_args("write_file", &args);
+        assert_eq!(red["path"], json!("/tmp/foo"));
+        let c = red["content"].as_str().unwrap();
+        assert!(c.starts_with("<redacted, "));
+        assert!(c.contains("19 bytes"));
+    }
+
+    #[test]
+    fn redacts_secret_named_fields_regardless_of_tool() {
+        let args = json!({"endpoint": "https://api.x", "api_key": "sk-abc123"});
+        let red = redact_args("any_tool", &args);
+        assert_eq!(red["endpoint"], json!("https://api.x"));
+        assert!(red["api_key"].as_str().unwrap().starts_with("<redacted, "));
+    }
+
+    #[test]
+    fn truncates_long_string_field() {
+        let long = "x".repeat(MAX_FIELD_BYTES + 50);
+        let args = json!({"command": long});
+        let red = redact_args("exec", &args);
+        let c = red["command"].as_str().unwrap();
+        assert!(c.ends_with("bytes total>"));
+        assert!(c.len() < MAX_FIELD_BYTES + 100);
+    }
+
+    #[test]
+    fn small_fields_pass_through() {
+        let args = json!({"url": "https://example.com"});
+        let red = redact_args("fetch_url", &args);
+        assert_eq!(red, args);
+    }
+
+    #[test]
+    fn utf8_floor_doesnt_split_multibyte() {
+        let s = "abcé"; // 'é' is 2 bytes -> total 5 bytes
+        // cap=4 lands on first byte of 'é'; floor should back to 3.
+        assert_eq!(utf8_floor(s, 4), 3);
+        // cap that hits a boundary stays put.
+        assert_eq!(utf8_floor(s, 3), 3);
+        // cap larger than s returns s.len().
+        assert_eq!(utf8_floor(s, 100), s.len());
+    }
 
     #[test]
     fn trim_keeps_last_max_lines_after_threshold() {

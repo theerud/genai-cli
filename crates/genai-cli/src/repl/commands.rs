@@ -48,6 +48,10 @@ pub struct ActionArgs {
     pub output: Option<String>,
     pub files: Vec<String>,
     pub voice: Option<String>,
+    /// `-a / --aspect` for `.image` (Imagen only)
+    pub aspect: Option<String>,
+    /// `-n / --count` for `.image` (Imagen only)
+    pub count: Option<u32>,
     pub prompt: String,
 }
 
@@ -201,6 +205,18 @@ fn parse_action_args(tail: &[&str]) -> Result<ActionArgs, String> {
             "-v" | "--voice" => {
                 i += 1;
                 a.voice = Some(tail.get(i).ok_or("missing value for -v")?.to_string());
+            }
+            "-a" | "--aspect" => {
+                i += 1;
+                a.aspect = Some(tail.get(i).ok_or("missing value for -a")?.to_string());
+            }
+            "-n" | "--count" => {
+                i += 1;
+                let raw = tail.get(i).ok_or("missing value for -n")?;
+                a.count = Some(
+                    raw.parse::<u32>()
+                        .map_err(|_| format!("-n must be a positive integer, got '{raw}'"))?,
+                );
             }
             other => prompt_tokens.push(other),
         }

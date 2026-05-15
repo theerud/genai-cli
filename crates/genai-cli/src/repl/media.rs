@@ -11,6 +11,24 @@ use crate::role;
 use super::ReplState;
 use super::commands::ActionArgs;
 
+/// Same gate as the CLI: -a / -n are honored only for Imagen models.
+/// Warn and drop the flags for Gemini image models.
+fn imagen_image_params(
+    model_id: &str,
+    aspect: Option<&str>,
+    count: Option<u32>,
+) -> (Option<String>, Option<u32>) {
+    let is_imagen = model_id.starts_with("imagen");
+    if !is_imagen && (aspect.is_some() || count.is_some()) {
+        eprintln!(
+            "warning: -a / -n are honored only for Imagen models. \
+             For {model_id}, describe orientation / variant count in the prompt."
+        );
+        return (None, None);
+    }
+    (aspect.map(String::from), count)
+}
+
 pub(super) async fn handle_image_cmd(state: &mut ReplState, args: ActionArgs) -> Result<()> {
     let model_id = args
         .model
@@ -42,13 +60,15 @@ pub(super) async fn handle_image_cmd(state: &mut ReplState, args: ActionArgs) ->
     };
 
     let inputs = output::load_input_images(&args.files)?;
+    let (aspect_ratio, count) =
+        imagen_image_params(&resolved.id, args.aspect.as_deref(), args.count);
 
     let req = ImageRequest {
         model: resolved.id,
         prompt: args.prompt.clone(),
         input_images: inputs,
-        aspect_ratio: None,
-        count: None,
+        aspect_ratio,
+        count,
     };
 
     let images = {

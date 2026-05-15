@@ -18,6 +18,12 @@ pub struct Cli {
     #[arg(short = 'o', long, help = "Output file path; '-' for stdout")]
     pub output: Option<String>,
 
+    #[arg(short = 'a', long, help = "Image aspect ratio (Imagen only: 1:1, 16:9, 9:16, 4:3, 3:4)")]
+    pub aspect: Option<String>,
+
+    #[arg(short = 'n', long, help = "Number of image variants (Imagen only)")]
+    pub count: Option<u32>,
+
     #[arg(long, help = "Disable streaming output")]
     pub no_stream: bool,
 

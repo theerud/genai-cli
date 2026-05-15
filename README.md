@@ -44,9 +44,14 @@ Image / audio:
 
 ```bash
 genai -m gemini-2.5-flash-image -o cat.png "a watercolor cat"
+genai -m imagen-4.0-generate-001 -a 16:9 -n 4 "a stately house at sunset"
 genai -m gemini-2.5-flash-preview-tts -o hi.wav "Hello there."
 genai -m lyria-3-clip-preview -o tune.mp3 "lofi piano"
 ```
+
+Without `-o`, generated media lands in `<data_dir>/generated/` with a timestamped, prompt-derived name. The `wrote …` line tells you the resolved path.
+
+`-a` / `-n` are Imagen-only knobs. For Gemini image models, describe orientation in the prompt and re-run for variants.
 
 Pipe-friendly: when stdout isn't a TTY, output is plain text — no ANSI, no streaming flushes.
 

@@ -100,6 +100,28 @@ fn print_error_chain(err: &anyhow::Error) {
     }
 }
 
+/// Pass through `-a` / `-n` only when the model is an Imagen family
+/// (the API's `predict` endpoint handles them). Gemini image models
+/// (nano-banana family) are conversational and don't take structured
+/// aspect / count parameters — they want orientation phrasing in the
+/// prompt instead. Warn loudly when the flags are ignored so the user
+/// knows their command didn't fully apply.
+fn imagen_image_params(
+    model_id: &str,
+    aspect: Option<&str>,
+    count: Option<u32>,
+) -> (Option<String>, Option<u32>) {
+    let is_imagen = model_id.starts_with("imagen");
+    if !is_imagen && (aspect.is_some() || count.is_some()) {
+        eprintln!(
+            "warning: -a / -n are honored only for Imagen models. \
+             For {model_id}, describe orientation / variant count in the prompt."
+        );
+        return (None, None);
+    }
+    (aspect.map(String::from), count)
+}
+
 /// Resolve `-o` for media subcommands.
 ///
 /// - `Some(path)` passes through unchanged.
@@ -230,13 +252,14 @@ async fn run_one_shot_image(
     let client = Client::new(api_key.to_string(), cfg.api_base().to_string())?;
 
     let inputs = output::load_input_images(&cli.file)?;
+    let (aspect_ratio, count) = imagen_image_params(&resolved.id, cli.aspect.as_deref(), cli.count);
 
     let req = ImageRequest {
         model: resolved.id.clone(),
         prompt,
         input_images: inputs,
-        aspect_ratio: None,
-        count: None,
+        aspect_ratio,
+        count,
     };
     let images = {
         let _s = spinner::Spinner::start("generating image...");

@@ -47,11 +47,18 @@ Long role / session names are truncated to 16 chars with an ellipsis.
 | `.trust [list\|clear\|drop <name>]` | inspect / revoke per-session tool trust |
 | `.undo` | drop the last completed turn (history + DB) |
 | `.retry` | re-run the previous user prompt |
-| `.image [-m MODEL] [-o PATH] [-f FILE] "prompt"` | image generation |
+| `.image [-m MODEL] [-o PATH] [-f FILE] [-a RATIO] [-n N] "prompt"` | image generation |
 | `.tts [-m MODEL] [-v VOICE] [-o PATH] "text"` | TTS |
 | `.music [-m MODEL] [-o PATH] "prompt"` | music generation |
 
 Ctrl-C during a streaming response cancels cleanly without polluting session history. Up-arrow recalls your prompt so you can edit and resend.
+
+### Image-generation flags
+
+- `-a / --aspect <ratio>` — `1:1`, `16:9`, `9:16`, `4:3`, `3:4`. **Imagen models only.**
+- `-n / --count <N>` — number of variants. **Imagen models only.**
+
+Gemini image models (the nano-banana family — `gemini-2.5-flash-image`, `gemini-3-pro-image-preview`, etc.) are conversational and don't take structured aspect or count parameters. Describe orientation in the prompt (`"... landscape, cinematic, 16:9 framing"`) and run the command N times for variants. The flags warn and pass through unchanged when used with those models.
 
 ## Tab completion
 

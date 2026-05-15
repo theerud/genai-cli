@@ -79,7 +79,7 @@ pub fn run(force: bool) -> Result<()> {
     eprintln!();
     eprintln!("Step 3/3 — Starter roles (optional)");
     eprintln!("  coding    — senior-engineer system prompt, gemini-2.5-pro");
-    eprintln!("  research  — citation-first assistant with google_search enabled");
+    eprintln!("  research  — loop-mode agent: google_search + fetch_url + write_file");
     let want_roles = ui::confirm("Install both?", true)?;
 
     // Write .env
@@ -242,14 +242,24 @@ temperature = 0.4
 thinking_level = "high"
 "#;
 
-const STARTER_RESEARCH_ROLE: &str = r#"# Web-grounded research assistant. Uses google_search server-side.
+const STARTER_RESEARCH_ROLE: &str = r#"# Iterative research agent: searches, fetches sources, optionally writes a report.
 model = "gemini-2.5-pro"
+mode = "loop"
+max_iterations = 20
+temperature = 0.3
 system_prompt = """
-You are a research assistant. For anything time-sensitive or factual,
-call google_search first and cite the URLs you used inline. If the search
-returns nothing useful, say so rather than guessing.
+You are a research agent. Work iteratively:
+1. Use google_search to find relevant sources.
+2. Use fetch_url to read promising pages in full when the snippets aren't enough.
+3. Take notes as you go and cite URLs inline.
+4. If the user asked for a file (HTML, Markdown, etc.), write it with write_file
+   and reply with a one-paragraph summary plus the output path.
+5. Otherwise, reply with the final answer in chat.
+
+Stop calling tools once you can answer. Prefer recent sources for time-sensitive
+questions; say so if the search returns nothing useful rather than guessing.
 """
-tools = ["google_search"]
+tools = ["google_search", "url_context", "fetch_url", "write_file"]
 "#;
 
 #[cfg(unix)]

@@ -140,7 +140,9 @@ priority = 100                   # higher wins; ties broken by config order
    - Private networks: `localhost`, `::1`, RFC1918 (`10.*`, `172.16-31.*`, `192.168.*`), `169.254.*` (incl. cloud metadata at `169.254.169.254`), `0.*`, `127.*`.
 4. What survives the floor falls through to the tool's own default — `exec` and confirmable user tools prompt; read-only built-ins run silently.
 
-For tools that take path args (`read_file`, `list_dir`), the policy matches against the *canonicalized* path. Symlinks are resolved before the rule check, so `ln -s ~/.ssh /tmp/x` can't bypass a path-based deny.
+> **The built-in floor is not a hard security boundary.** User rules are evaluated *before* it, so a sufficiently-high-priority `allow` rule on a sensitive path or private host **does** override the floor. This is intentional — it lets you grant `fetch_url` access to a specific internal host, or `read_file` to a specific file under `~/.aws/`, without rewriting the policy from scratch. If you want the floor to be unconditional, don't add overriding rules; treat it as a default rather than a sandbox.
+
+For tools that take path args (`read_file`, `list_dir`, `write_file`, `generate_media`), the policy matches against the *canonicalized* path. Symlinks are resolved before the rule check, so `ln -s ~/.ssh /tmp/x` can't bypass a path-based deny.
 
 ### Glob semantics
 

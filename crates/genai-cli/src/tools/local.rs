@@ -467,7 +467,10 @@ fn build_generate_media_declaration() -> FunctionDeclaration {
     // schema is then shaped to only expose parameters that model accepts —
     // no aspect/count for a conversational model, no input_paths for an
     // Imagen one — so the LLM can't be tempted by an inapplicable field.
-    let cfg = crate::config::load().unwrap_or_default();
+    let cfg = crate::config::load().unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "generate_media: config load failed, using defaults");
+        crate::config::Config::default()
+    });
     let image_model = cfg
         .model
         .image

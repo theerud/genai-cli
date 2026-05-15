@@ -8,6 +8,13 @@
 //! order. The first matching rule wins. If no user rule matches, the
 //! built-in floor (sensitive paths + private-network deny) is consulted
 //! before falling back to the tool's `requires_confirmation()` default.
+//!
+//! NOTE: user rules are checked *before* the built-in floor, so a
+//! high-priority `allow` rule on a sensitive path or private host will
+//! override the floor's deny. This is intentional — it lets users grant
+//! narrow access (one internal host for `fetch_url`, one file under
+//! `~/.aws/` for `read_file`) without disabling the floor wholesale. If
+//! you need the floor to be unconditional, don't add overriding rules.
 
 use serde_json::Value;
 use std::sync::OnceLock;
@@ -79,7 +86,10 @@ pub fn evaluate(tool_name: &str, normalized_args: &Value) -> PolicyOutcome {
 fn sorted_rules() -> &'static [(usize, PolicyRule)] {
     static CACHE: OnceLock<Vec<(usize, PolicyRule)>> = OnceLock::new();
     CACHE.get_or_init(|| {
-        let cfg = crate::config::load().unwrap_or_default();
+        let cfg = crate::config::load().unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "policy: config load failed, no user rules will apply");
+            crate::config::Config::default()
+        });
         let mut rules: Vec<(usize, PolicyRule)> = cfg
             .security
             .rules

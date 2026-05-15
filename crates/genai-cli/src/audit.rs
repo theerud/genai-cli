@@ -21,7 +21,10 @@ static SETTINGS: OnceLock<Settings> = OnceLock::new();
 
 fn settings() -> &'static Settings {
     SETTINGS.get_or_init(|| {
-        let cfg = crate::config::load().unwrap_or_default();
+        let cfg = crate::config::load().unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "audit: config load failed, using defaults");
+            crate::config::Config::default()
+        });
         let path = crate::config::paths().ok().map(|p| p.data_dir.join("tool-log.jsonl"));
         Settings {
             enabled: cfg.security.audit.enabled && path.is_some(),

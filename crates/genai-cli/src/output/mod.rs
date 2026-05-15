@@ -258,14 +258,18 @@ pub fn write_audio(output: &str, audio: &AudioOut) -> Result<()> {
 /// Write one or more images. With multiple images, `output` is treated as a
 /// stem and we append `-<n>` plus a per-image extension. After writing, an
 /// in-terminal preview is attempted (silent no-op on unsupported terminals).
-pub fn write_images(output: &str, images: &[ImageOut], preview: image_preview::Preference) -> Result<()> {
+pub fn write_images(
+    output: &str,
+    images: &[ImageOut],
+    preview: image_preview::Preference,
+) -> Result<Vec<PathBuf>> {
     if output == "-" {
         if images.len() > 1 {
             bail!("multiple images: cannot write all to stdout");
         }
         let mut stdout = std::io::stdout().lock();
         stdout.write_all(&images[0].bytes)?;
-        return Ok(());
+        return Ok(Vec::new());
     }
     if images.len() == 1 {
         let mut path = PathBuf::from(expand_path(output));
@@ -279,7 +283,7 @@ pub fn write_images(output: &str, images: &[ImageOut], preview: image_preview::P
         std::fs::write(&path, &images[0].bytes)?;
         eprintln!("wrote {} {}", path.display(), describe_image(&images[0].bytes));
         let _ = image_preview::show(preview, &images[0].bytes);
-        return Ok(());
+        return Ok(vec![path]);
     }
     let base = PathBuf::from(expand_path(output));
     let stem = base
@@ -289,6 +293,7 @@ pub fn write_images(output: &str, images: &[ImageOut], preview: image_preview::P
     let ext_from_path = base.extension().and_then(|s| s.to_str()).map(String::from);
     let dir = base.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(dir)?;
+    let mut written = Vec::with_capacity(images.len());
     for (i, img) in images.iter().enumerate() {
         let ext = ext_from_path
             .clone()
@@ -297,8 +302,9 @@ pub fn write_images(output: &str, images: &[ImageOut], preview: image_preview::P
         std::fs::write(&path, &img.bytes)?;
         eprintln!("wrote {} {}", path.display(), describe_image(&img.bytes));
         let _ = image_preview::show(preview, &img.bytes);
+        written.push(path);
     }
-    Ok(())
+    Ok(written)
 }
 
 /// Load image files from disk into the shape `generate_image` expects. Emits

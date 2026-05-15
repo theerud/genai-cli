@@ -59,7 +59,7 @@ pub(super) async fn handle_image_cmd(state: &mut ReplState, args: ActionArgs) ->
     };
     let preview =
         output::image_preview::Preference::from_config(state.cfg.output.image_preview.as_deref());
-    output::write_images(&out_path, &images, preview)?;
+    let _ = output::write_images(&out_path, &images, preview)?;
     Ok(())
 }
 

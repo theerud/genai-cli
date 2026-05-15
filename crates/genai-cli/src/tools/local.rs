@@ -561,7 +561,7 @@ fn build_generate_media_declaration() -> FunctionDeclaration {
                 },
                 "preview": {
                     "type": "boolean",
-                    "description": "Image only, TTY only. Show inline preview after writing. Default false; set true for the user-facing artifact."
+                    "description": "Image only, TTY only. Show inline preview after writing. Default true; set false for intermediate generations in a loop where the user only cares about the final asset."
                 },
                 "image": {
                     "type": "object",
@@ -635,7 +635,12 @@ impl LocalTool for GenerateMedia {
 
         let model_override = args.get("model").and_then(Value::as_str).map(String::from);
         let output_override = args.get("output_path").and_then(Value::as_str).map(String::from);
-        let preview = args.get("preview").and_then(Value::as_bool).unwrap_or(false);
+        // Default true: a one-off generation should flash on screen on a
+        // capable terminal. Loop-mode roles that don't want intermediate
+        // previews instruct the model to set this false in the system
+        // prompt. image_preview::show is silent when the terminal can't
+        // render, so leaving it on is safe.
+        let preview = args.get("preview").and_then(Value::as_bool).unwrap_or(true);
 
         match kind.as_str() {
             "image" => run_image(&cfg, &client, prompt, model_override, output_override, preview, args.get("image")),
@@ -725,7 +730,11 @@ fn run_image(
     } else {
         crate::output::image_preview::Preference::Off
     };
-    crate::output::write_images(&out_path, &images, pref)?;
+    let written = crate::output::write_images(&out_path, &images, pref)?;
+    let written_strs: Vec<String> = written
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
 
     let dims: Vec<Value> = images
         .iter()
@@ -735,9 +744,11 @@ fn run_image(
         })
         .collect();
     let total: usize = images.iter().map(|i| i.bytes.len()).sum();
+    let primary_path = written_strs.first().cloned().unwrap_or(out_path);
     let mut out = json!({
         "kind": "image",
-        "path": out_path,
+        "path": primary_path,
+        "paths": written_strs,
         "count": images.len(),
         "bytes": total,
         "images": dims,

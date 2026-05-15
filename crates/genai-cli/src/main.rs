@@ -245,7 +245,7 @@ async fn run_one_shot_image(
         client.generate_image(req).await?
     };
     let preview = output::image_preview::Preference::from_config(cfg.output.image_preview.as_deref());
-    write_images(&output, &images, preview)?;
+    let _written = write_images(&output, &images, preview)?;
     Ok(())
 }
 

@@ -45,7 +45,7 @@ Confirmable tools (`exec`, `write_file`, `generate_media`) prompt `[y/N/A]` per 
   "prompt":      "...",                  // for speech, this is the text to read
   "output_path": "/abs/or/~/path.ext",   // optional; auto-named when omitted
   "model":       "imagen-4...",          // optional; falls back to cfg defaults
-  "preview":     false,                  // image only, TTY only; default off
+  "preview":     true,                   // image only, TTY only; default true
 
   "image":  { "aspect": "16:9", "count": 2, "input_paths": ["ref.png"] },
   "speech": { "voice": "Kore" },
@@ -55,7 +55,7 @@ Confirmable tools (`exec`, `write_file`, `generate_media`) prompt `[y/N/A]` per 
 
 - `aspect` / `count` are Imagen-only; warn-and-drop for nano-banana models, same as the CLI.
 - `input_paths` enables nano-banana edit/variation workflows.
-- `preview: true` renders the image inline (Kitty / iTerm2) — useful when the image is the user-facing artifact; default `false` keeps intermediate generations off-screen.
+- `preview` defaults to `true` so a one-off generation flashes on screen on Kitty/iTerm2-class terminals. Set `preview: false` in loop-mode roles for intermediate generations where the user only cares about the final asset. Silent no-op on terminals without inline-image support.
 - Multi-speaker TTS (Gemini 2.5) and Lyria 3's image input / lyrics / tempo are not yet wired through this tool; they will land in a follow-up slice under the same tool name.
 
 ## User-defined tools

@@ -103,9 +103,27 @@ fn part_to_json(p: &Part) -> serde_json::Value {
 
 /// Load files from disk, build a user message that inlines them, return the
 /// message plus the loaded attachments (caller decides whether to persist).
+///
+/// When `files` is non-empty, the prompt is prefixed with a
+/// `[attached: <abs-path>, ...]` line so tools that take path arguments
+/// (e.g. `generate_media.image.input_paths`) can be invoked with the
+/// actual file paths rather than relying on the LLM to invent them.
 pub fn build_user_message(prompt: String, files: &[PathBuf]) -> Result<(Content, Vec<Attachment>)> {
     let mut parts: Vec<Part> = Vec::with_capacity(1 + files.len());
-    parts.push(Part::Text { text: prompt });
+    let resolved_paths: Vec<String> = files
+        .iter()
+        .map(|f| {
+            std::fs::canonicalize(f)
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|_| f.display().to_string())
+        })
+        .collect();
+    let prompt_with_preamble = if resolved_paths.is_empty() {
+        prompt
+    } else {
+        format!("[attached: {}]\n{prompt}", resolved_paths.join(", "))
+    };
+    parts.push(Part::Text { text: prompt_with_preamble });
     let mut atts = Vec::with_capacity(files.len());
     for f in files {
         let att = attachment::load(f)?;

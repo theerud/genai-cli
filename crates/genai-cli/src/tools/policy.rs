@@ -173,14 +173,18 @@ const BUILTIN_DENY_PATHS: &[&str] = &[
 const BUILTIN_DENY_HOSTS: &[&str] = &["localhost", "::1"];
 
 fn builtin_deny_match(tool: &str, args: &Value) -> Option<&'static str> {
-    let path_key = match tool {
-        "read_file" | "list_dir" | "write_file" => Some("path"),
-        "generate_media" => Some("output_path"),
-        _ => None,
+    // Each tool can have one or more path-bearing arg keys; we check every
+    // one against the sensitive-path floor. generate_media has two —
+    // output_path (write target) and prompt_file (read source for TTS).
+    let path_keys: &[&str] = match tool {
+        "read_file" | "list_dir" | "write_file" => &["path"],
+        "generate_media" => &["output_path", "prompt_file"],
+        _ => &[],
     };
-    if let Some(key) = path_key
-        && let Some(path) = args.get(key).and_then(Value::as_str)
-    {
+    for key in path_keys {
+        let Some(path) = args.get(*key).and_then(Value::as_str) else {
+            continue;
+        };
         let expanded = crate::output::expand_path(path);
         for p in BUILTIN_DENY_PATHS {
             let exp = crate::output::expand_path(p);

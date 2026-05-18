@@ -51,7 +51,11 @@ The LLM only sees parameters that actually apply to the resolved model, so it ca
 ```jsonc
 {
   "kind":        "image" | "speech" | "music",
-  "prompt":      "...",                  // for speech, this is the text to read
+
+  // Provide exactly one of:
+  "prompt":      "...",                  // inline prompt (or transcript for speech)
+  "prompt_file": "/abs/path.txt",        // path to a UTF-8 text file (≤ 1 MB)
+
   "output_path": "/abs/or/~/path.ext",   // optional; auto-named when omitted
   "preview":     true,                   // image only, TTY only; default true
 
@@ -65,6 +69,10 @@ The LLM only sees parameters that actually apply to the resolved model, so it ca
   "music":  { }
 }
 ```
+
+**`prompt` vs `prompt_file`.** Mutually exclusive — provide exactly one. Use `prompt` for short inline content; use `prompt_file` for long inputs (podcast transcripts, lyric sheets, etc.) so the content doesn't have to round-trip through the LLM's output tokens. When the user attached a text file with `-f`, the file's path appears in the `[attached: ...]` preamble at the top of the user message — the LLM should pass that path as `prompt_file` directly.
+
+`prompt_file` is treated as a read by the security floor: the same sensitive-path denies (`~/.ssh/*`, `~/.aws/*`, `~/.gnupg/*`, `~/.netrc`, `<config_dir>/.env`) that apply to `read_file` also apply here. Don't let an LLM exfiltrate secrets by handing them to the TTS API as a "transcript."
 
 - The top-level `model` field is **not exposed** to the LLM. Image / TTS / music model is fixed by config; the LLM cannot override mid-call.
 - For Imagen-style: `aspect` enum-constrained to `1:1 / 16:9 / 9:16 / 4:3 / 3:4`; `count` integer-bounded to `1-4`.

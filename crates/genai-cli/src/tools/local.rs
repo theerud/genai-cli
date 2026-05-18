@@ -17,6 +17,11 @@ const FETCH_TIMEOUT_SECS: u64 = 15;
 const EXEC_TIMEOUT_SECS: u64 = 30;
 const EXEC_MAX_OUTPUT: usize = 64 * 1024;
 const MAX_WRITE_BYTES: usize = 10 * 1024 * 1024;
+/// Safety cap for `generate_media.prompt_file`. The API itself has
+/// tighter limits (Gemini 2.5 TTS is in the low thousands of
+/// characters); this is just a sanity net against the LLM passing a
+/// gigabyte log file by mistake.
+const MAX_PROMPT_FILE_BYTES: u64 = 1024 * 1024;
 
 /// A client-side tool that Gemini can call via function calling.
 pub trait LocalTool: Sync + Send {
@@ -558,7 +563,11 @@ pub fn build_generate_media_declaration(
                 },
                 "prompt": {
                     "type": "string",
-                    "description": "Image/music: descriptive prompt. Speech: the text to read aloud."
+                    "description": "Image/music: descriptive prompt. Speech: the text to read aloud. Mutually exclusive with prompt_file."
+                },
+                "prompt_file": {
+                    "type": "string",
+                    "description": "Absolute path to a UTF-8 text file whose content is used as the prompt. Mutually exclusive with prompt. Use this for long inputs (e.g., podcast transcripts) so the content doesn't have to be re-emitted by the model. When the user attached a text file via -f, its path appears in the [attached: ...] preamble — use that path here."
                 },
                 "output_path": {
                     "type": "string",
@@ -581,7 +590,7 @@ pub fn build_generate_media_declaration(
                     "description": "Music-only options. No extra fields yet; reserved."
                 }
             },
-            "required": ["kind", "prompt"]
+            "required": ["kind"]
         }),
     }
 }
@@ -616,13 +625,16 @@ impl LocalTool for GenerateMedia {
 
     fn describe_call(&self, args: &Value) -> String {
         let kind = args.get("kind").and_then(Value::as_str).unwrap_or("?");
-        let prompt = args
-            .get("prompt")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .chars()
-            .take(60)
-            .collect::<String>();
+        let prompt = if let Some(file) = args.get("prompt_file").and_then(Value::as_str) {
+            format!("from {file}")
+        } else {
+            args.get("prompt")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .chars()
+                .take(60)
+                .collect::<String>()
+        };
         let path = args
             .get("output_path")
             .and_then(Value::as_str)
@@ -648,7 +660,7 @@ impl LocalTool for GenerateMedia {
 
     fn run(&self, args: &Value) -> Result<Value> {
         let kind = str_arg(args, "kind")?.to_string();
-        let prompt = str_arg(args, "prompt")?.to_string();
+        let prompt = resolve_prompt(args)?;
         let cfg = crate::config::load()?;
         let api_key = cfg.require_api_key()?.to_string();
         let base = cfg.api_base().to_string();
@@ -674,10 +686,57 @@ impl LocalTool for GenerateMedia {
     fn normalize_for_policy(&self, args: &Value) -> Value {
         let mut out = args.clone();
         if let Some(p) = out.get("output_path").and_then(Value::as_str) {
-            let canon = canonicalize_parent(p);
-            out["output_path"] = json!(canon);
+            out["output_path"] = json!(canonicalize_parent(p));
+        }
+        if let Some(p) = out.get("prompt_file").and_then(Value::as_str) {
+            // prompt_file is a read — fully canonicalize when the file
+            // exists so the policy floor sees the resolved path.
+            let expanded = crate::output::expand_path(p);
+            let canon = std::fs::canonicalize(&expanded)
+                .map(|c| c.display().to_string())
+                .unwrap_or(expanded);
+            out["prompt_file"] = json!(canon);
         }
         out
+    }
+}
+
+/// Resolve the prompt content for `generate_media`. Either `prompt` is
+/// set (literal string) or `prompt_file` points at a UTF-8 text file we
+/// read from disk. Mutually exclusive — both unset or both set is an
+/// error.
+fn resolve_prompt(args: &Value) -> Result<String> {
+    let inline = args
+        .get("prompt")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
+    let file = args
+        .get("prompt_file")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty());
+    match (inline, file) {
+        (Some(p), None) => Ok(p.to_string()),
+        (None, Some(path)) => {
+            let expanded = crate::output::expand_path(path);
+            let canon = std::fs::canonicalize(&expanded).map_err(|e| {
+                anyhow::anyhow!("cannot resolve prompt_file '{expanded}': {e}")
+            })?;
+            let meta = std::fs::metadata(&canon)?;
+            if !meta.is_file() {
+                bail!("prompt_file is not a regular file: {}", canon.display());
+            }
+            if meta.len() > MAX_PROMPT_FILE_BYTES {
+                bail!(
+                    "prompt_file exceeds {} KB cap ({} bytes)",
+                    MAX_PROMPT_FILE_BYTES / 1024,
+                    meta.len()
+                );
+            }
+            let text = std::fs::read_to_string(&canon)?;
+            Ok(text)
+        }
+        (Some(_), Some(_)) => bail!("set either 'prompt' or 'prompt_file', not both"),
+        (None, None) => bail!("missing 'prompt' or 'prompt_file'"),
     }
 }
 
@@ -936,6 +995,58 @@ mod tests {
         let path = normalized.get("output_path").and_then(Value::as_str).unwrap();
         assert!(path.ends_with("out.png"));
         assert!(!path.contains("/./"));
+    }
+
+    #[test]
+    fn resolve_prompt_takes_inline() {
+        let args = json!({"prompt": "hello"});
+        assert_eq!(resolve_prompt(&args).unwrap(), "hello");
+    }
+
+    #[test]
+    fn resolve_prompt_reads_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript.txt");
+        std::fs::write(&path, "Alice: Hi.\nBob: Hi back.").unwrap();
+        let args = json!({"prompt_file": path.display().to_string()});
+        let s = resolve_prompt(&args).unwrap();
+        assert!(s.starts_with("Alice: Hi."));
+    }
+
+    #[test]
+    fn resolve_prompt_rejects_both_set() {
+        let args = json!({"prompt": "x", "prompt_file": "/tmp/y"});
+        let err = resolve_prompt(&args).unwrap_err().to_string();
+        assert!(err.contains("not both"));
+    }
+
+    #[test]
+    fn resolve_prompt_rejects_neither_set() {
+        let args = json!({});
+        let err = resolve_prompt(&args).unwrap_err().to_string();
+        assert!(err.contains("missing"));
+    }
+
+    #[test]
+    fn resolve_prompt_rejects_oversized_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.txt");
+        let big = vec![b'x'; (MAX_PROMPT_FILE_BYTES + 1) as usize];
+        std::fs::write(&path, &big).unwrap();
+        let args = json!({"prompt_file": path.display().to_string()});
+        let err = resolve_prompt(&args).unwrap_err().to_string();
+        assert!(err.contains("cap"));
+    }
+
+    #[test]
+    fn describe_call_shows_from_path_when_prompt_file_set() {
+        let tool = GenerateMedia;
+        let args = json!({
+            "kind": "speech",
+            "prompt_file": "/tmp/transcript.txt",
+        });
+        let s = tool.describe_call(&args);
+        assert!(s.contains("from /tmp/transcript.txt"));
     }
 
     #[test]

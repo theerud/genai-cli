@@ -461,22 +461,17 @@ impl LocalTool for WriteFile {
 
 // ---------- generate_media ----------
 
-fn build_generate_media_declaration() -> FunctionDeclaration {
-    // Resolve the *active* image model at process start. Roles can override
-    // cfg.model.image.default via aliases or by setting it directly. The
-    // schema is then shaped to only expose parameters that model accepts —
-    // no aspect/count for a conversational model, no input_paths for an
-    // Imagen one — so the LLM can't be tempted by an inapplicable field.
-    let cfg = crate::config::load().unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "generate_media: config load failed, using defaults");
-        crate::config::Config::default()
-    });
-    let image_model = cfg
-        .model
-        .image
-        .default
-        .clone()
-        .unwrap_or_else(|| "imagen-4.0-generate-001".to_string());
+pub fn build_generate_media_declaration(
+    ctx: &super::DeclarationContext<'_>,
+) -> FunctionDeclaration {
+    // Resolve the *effective* image model for this turn (role overrides
+    // win over cfg.media, which wins over the legacy [model.image].default,
+    // which wins over a hardcoded fallback). The schema is then shaped to
+    // only expose parameters that model accepts — no aspect/count for a
+    // conversational model, no input_paths for an Imagen one — so the
+    // LLM can't be tempted by an inapplicable field.
+    let image_model =
+        crate::role::effective_media(ctx.role, ctx.cfg, crate::config::MediaKind::Image);
     let is_structured = image_model.starts_with("imagen");
 
     let description = format!(
@@ -603,8 +598,20 @@ impl LocalTool for GenerateMedia {
     }
 
     fn declaration(&self) -> FunctionDeclaration {
-        static DECL: std::sync::OnceLock<FunctionDeclaration> = std::sync::OnceLock::new();
-        DECL.get_or_init(build_generate_media_declaration).clone()
+        // Fallback path: a context-free declaration using whatever
+        // config can be loaded at this moment. The real entry point is
+        // `build_generate_media_declaration` via `build_request_tools`,
+        // which passes the active role/cfg. This impl exists so the
+        // `LocalTool` trait stays uniform and tests that probe the trait
+        // method still work.
+        let cfg = crate::config::load().unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "generate_media declaration: config load failed");
+            crate::config::Config::default()
+        });
+        build_generate_media_declaration(&super::DeclarationContext {
+            role: None,
+            cfg: &cfg,
+        })
     }
 
     fn describe_call(&self, args: &Value) -> String {
@@ -684,8 +691,7 @@ fn run_image(
     image_opts: Option<&Value>,
 ) -> Result<Value> {
     let model_id = model_override
-        .or_else(|| cfg.model.image.default.clone())
-        .unwrap_or_else(|| "imagen-4.0-generate-001".to_string());
+        .unwrap_or_else(|| cfg.media_default(crate::config::MediaKind::Image));
     let resolved = crate::models::alias::resolve(cfg, &model_id);
 
     let aspect = image_opts
@@ -783,8 +789,7 @@ fn run_speech(
     speech_opts: Option<&Value>,
 ) -> Result<Value> {
     let model_id = model_override
-        .or_else(|| cfg.model.tts.default.clone())
-        .unwrap_or_else(|| "gemini-2.5-flash-preview-tts".to_string());
+        .unwrap_or_else(|| cfg.media_default(crate::config::MediaKind::Speech));
     let resolved = crate::models::alias::resolve(cfg, &model_id);
     let voice = speech_opts
         .and_then(|v| v.get("voice"))
@@ -830,7 +835,8 @@ fn run_music(
     output_override: Option<String>,
     _music_opts: Option<&Value>,
 ) -> Result<Value> {
-    let model_id = model_override.unwrap_or_else(|| "lyria-3-clip-preview".to_string());
+    let model_id = model_override
+        .unwrap_or_else(|| cfg.media_default(crate::config::MediaKind::Music));
     let resolved = crate::models::alias::resolve(cfg, &model_id);
 
     let out_path = match output_override {

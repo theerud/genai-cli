@@ -377,12 +377,14 @@ async fn run_one_shot_chat(
             db_opt,
             loop_mode,
             max_iterations,
+            role,
         )
         .await;
     }
 
     let gen_cfg = build_generation_config(cfg, &resolved);
-    let tools_list = tools::build_request_tools(&enabled_tools);
+    let decl_ctx = tools::DeclarationContext { role, cfg };
+    let tools_list = tools::build_request_tools(&enabled_tools, &decl_ctx);
     let req = ChatRequest {
         model: &resolved.id,
         contents: &contents,
@@ -498,15 +500,25 @@ async fn run_one_shot_with_tools(
     db_opt: Option<session::db::Database>,
     loop_mode: bool,
     max_iterations: u32,
+    role: Option<&role::Role>,
 ) -> Result<()> {
+    use config::MediaKind;
+    let decl_ctx = tools::DeclarationContext { role, cfg };
+    let request_tools = tools::build_request_tools(&enabled_tools, &decl_ctx);
+    let media_models = tools::runner::MediaModels {
+        image: Some(role::effective_media(role, cfg, MediaKind::Image)),
+        speech: Some(role::effective_media(role, cfg, MediaKind::Speech)),
+        music: Some(role::effective_media(role, cfg, MediaKind::Music)),
+    };
     let req = tools::runner::ToolLoopRequest {
         model: resolved.id.clone(),
         contents,
         system_instruction: system_prompt,
         generation_config: build_generation_config(cfg, &resolved),
-        enabled_tools,
+        request_tools,
         max_iterations,
         loop_mode,
+        media_models,
     };
     let mut ui = tools::cli_ui::CliToolUi::new();
     let outcome = tools::runner::run(client, req, &mut ui).await?;

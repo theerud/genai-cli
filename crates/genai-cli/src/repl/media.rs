@@ -29,8 +29,7 @@ pub(super) async fn handle_image_cmd(state: &mut ReplState, args: ActionArgs) ->
                 })
                 .and_then(|r| r.model.clone())
         })
-        .or_else(|| state.cfg.model.image.default.clone())
-        .unwrap_or_else(|| "imagen-4".to_string());
+        .unwrap_or_else(|| state.cfg.media_default(crate::config::MediaKind::Image));
     let resolved = alias::resolve(&state.cfg, &model_id);
     crate::models::validate(&state.registry, &resolved.id, crate::models::CAP_IMAGE_OUT);
 
@@ -67,8 +66,7 @@ pub(super) async fn handle_tts_cmd(state: &mut ReplState, args: ActionArgs) -> R
     let model_id = args
         .model
         .clone()
-        .or_else(|| state.cfg.model.tts.default.clone())
-        .unwrap_or_else(|| "gemini-2.5-flash-preview-tts".to_string());
+        .unwrap_or_else(|| state.cfg.media_default(crate::config::MediaKind::Speech));
     let resolved = alias::resolve(&state.cfg, &model_id);
     crate::models::validate(&state.registry, &resolved.id, crate::models::CAP_TTS);
 
@@ -102,8 +100,7 @@ pub(super) async fn handle_music_cmd(state: &mut ReplState, args: ActionArgs) ->
     let model_id = args
         .model
         .clone()
-        .or_else(|| state.role.as_ref().and_then(|r| r.model.clone()))
-        .unwrap_or_else(|| "lyria-3-pro-preview".to_string());
+        .unwrap_or_else(|| state.cfg.media_default(crate::config::MediaKind::Music));
     let resolved = alias::resolve(&state.cfg, &model_id);
     crate::models::validate(&state.registry, &resolved.id, crate::models::CAP_MUSIC_OUT);
 

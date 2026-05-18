@@ -21,6 +21,11 @@ pub struct Role {
     /// in interactive loop mode the user is prompted to extend the budget
     /// when the cap is hit.
     pub max_iterations: Option<u32>,
+    /// Per-role overrides for media generation models. Each field, when
+    /// set, wins over the global `[media]` table in config.toml for
+    /// `generate_media` calls made under this role.
+    #[serde(default)]
+    pub media: crate::config::MediaConfig,
 }
 
 pub const DEFAULT_MAX_ITERATIONS: u32 = 8;
@@ -75,6 +80,111 @@ pub fn list_available() -> Result<Vec<String>> {
     }
     out.sort();
     Ok(out)
+}
+
+/// Resolve the effective media model for `kind`, applying the
+/// role-overrides-cfg precedence:
+///
+/// 1. `role.media.<kind>` if the role sets it
+/// 2. `cfg.media.<kind>` from config.toml
+/// 3. Legacy `[model.image]` / `[model.tts]` (warned once)
+/// 4. Hardcoded fallback
+pub fn effective_media(
+    role: Option<&Role>,
+    cfg: &crate::config::Config,
+    kind: crate::config::MediaKind,
+) -> String {
+    if let Some(r) = role
+        && let Some(v) = media_field(&r.media, kind)
+    {
+        return v.to_string();
+    }
+    cfg.media_default(kind)
+}
+
+fn media_field(m: &crate::config::MediaConfig, kind: crate::config::MediaKind) -> Option<&str> {
+    match kind {
+        crate::config::MediaKind::Image => m.image.as_deref(),
+        crate::config::MediaKind::Speech => m.speech.as_deref(),
+        crate::config::MediaKind::Music => m.music.as_deref(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, MediaConfig, MediaKind, ModelDefaults, ModelImage, ModelTts};
+
+    fn role_with_media(image: Option<&str>, speech: Option<&str>, music: Option<&str>) -> Role {
+        Role {
+            media: MediaConfig {
+                image: image.map(String::from),
+                speech: speech.map(String::from),
+                music: music.map(String::from),
+            },
+            ..Default::default()
+        }
+    }
+
+    fn cfg_with_new_media(image: Option<&str>, speech: Option<&str>, music: Option<&str>) -> Config {
+        Config {
+            media: MediaConfig {
+                image: image.map(String::from),
+                speech: speech.map(String::from),
+                music: music.map(String::from),
+            },
+            ..Default::default()
+        }
+    }
+
+    fn cfg_with_legacy(image: Option<&str>, tts: Option<&str>) -> Config {
+        Config {
+            model: ModelDefaults {
+                image: ModelImage { default: image.map(String::from) },
+                tts: ModelTts { default: tts.map(String::from), voice: None },
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn role_media_overrides_cfg_media() {
+        let cfg = cfg_with_new_media(Some("cfg-img"), Some("cfg-tts"), Some("cfg-mus"));
+        let role = role_with_media(Some("role-img"), None, None);
+        assert_eq!(effective_media(Some(&role), &cfg, MediaKind::Image), "role-img");
+        assert_eq!(effective_media(Some(&role), &cfg, MediaKind::Speech), "cfg-tts");
+        assert_eq!(effective_media(Some(&role), &cfg, MediaKind::Music), "cfg-mus");
+    }
+
+    #[test]
+    fn cfg_media_used_when_role_absent() {
+        let cfg = cfg_with_new_media(Some("cfg-img"), None, None);
+        assert_eq!(effective_media(None, &cfg, MediaKind::Image), "cfg-img");
+    }
+
+    #[test]
+    fn legacy_model_image_falls_back() {
+        let cfg = cfg_with_legacy(Some("legacy-img"), Some("legacy-tts"));
+        assert_eq!(effective_media(None, &cfg, MediaKind::Image), "legacy-img");
+        assert_eq!(effective_media(None, &cfg, MediaKind::Speech), "legacy-tts");
+    }
+
+    #[test]
+    fn hardcoded_fallback_when_nothing_set() {
+        let cfg = Config::default();
+        let img = effective_media(None, &cfg, MediaKind::Image);
+        assert!(img.starts_with("imagen-"));
+        let music = effective_media(None, &cfg, MediaKind::Music);
+        assert!(music.starts_with("lyria-"));
+    }
+
+    #[test]
+    fn cfg_media_wins_over_legacy() {
+        let mut cfg = cfg_with_new_media(Some("new"), None, None);
+        cfg.model.image.default = Some("legacy".into());
+        assert_eq!(effective_media(None, &cfg, MediaKind::Image), "new");
+    }
 }
 
 /// True when the role's configured model is a chat-capable model in the registry.

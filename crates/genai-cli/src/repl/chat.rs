@@ -26,7 +26,11 @@ pub(super) async fn chat_turn(state: &mut ReplState, user_text: String) -> Resul
     }
 
     let gen_cfg = state.build_generation_config();
-    let tools_list = tools::build_request_tools(&state.active_tools);
+    let decl_ctx = tools::DeclarationContext {
+        role: state.role.as_ref(),
+        cfg: &state.cfg,
+    };
+    let tools_list = tools::build_request_tools(&state.active_tools, &decl_ctx);
     let req = ChatRequest {
         model: &state.model.id,
         contents: &contents,
@@ -85,6 +89,18 @@ pub(super) async fn chat_turn(state: &mut ReplState, user_text: String) -> Resul
     }
 }
 
+fn resolve_media_models(
+    role: Option<&crate::role::Role>,
+    cfg: &crate::config::Config,
+) -> tools::runner::MediaModels {
+    use crate::config::MediaKind;
+    tools::runner::MediaModels {
+        image: Some(crate::role::effective_media(role, cfg, MediaKind::Image)),
+        speech: Some(crate::role::effective_media(role, cfg, MediaKind::Speech)),
+        music: Some(crate::role::effective_media(role, cfg, MediaKind::Music)),
+    }
+}
+
 fn persist_turn(
     db: &mut crate::session::db::Database,
     session_id: i64,
@@ -119,14 +135,21 @@ async fn chat_turn_with_tools(
     let loop_mode = state.role.as_ref().map(|r| r.is_loop_mode()).unwrap_or(false);
     let max_iterations =
         crate::role::iter_budget(state.max_iter_override, state.role.as_ref());
+    let decl_ctx = tools::DeclarationContext {
+        role: state.role.as_ref(),
+        cfg: &state.cfg,
+    };
+    let request_tools = tools::build_request_tools(&state.active_tools, &decl_ctx);
+    let media_models = resolve_media_models(state.role.as_ref(), &state.cfg);
     let req = tools::runner::ToolLoopRequest {
         model: state.model.id.clone(),
         contents,
         system_instruction: state.system_prompt.clone(),
         generation_config: state.build_generation_config(),
-        enabled_tools: state.active_tools.clone(),
+        request_tools,
         max_iterations,
         loop_mode,
+        media_models,
     };
     let outcome = match tools::runner::run(&state.client, req, &mut state.tool_ui).await {
         Ok(o) => o,

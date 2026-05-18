@@ -37,13 +37,33 @@ pub fn has_local(names: &[String]) -> bool {
     names.iter().any(|n| lookup_local(n).is_some())
 }
 
-pub fn build_request_tools(names: &[String]) -> Option<Vec<Tool>> {
+/// Context for declaration builders that depend on per-role / per-call
+/// state — currently only `generate_media`, whose image-model-aware
+/// schema is shaped by the resolved image model for this invocation.
+pub struct DeclarationContext<'a> {
+    pub role: Option<&'a crate::role::Role>,
+    pub cfg: &'a crate::config::Config,
+}
+
+pub fn build_request_tools(
+    names: &[String],
+    ctx: &DeclarationContext<'_>,
+) -> Option<Vec<Tool>> {
     let mut out: Vec<Tool> = Vec::new();
     let mut decls = Vec::new();
     for name in names {
         match classify(name) {
             ToolKind::Builtin(t) => out.push(t),
-            ToolKind::Local(t) => decls.push(t.declaration()),
+            ToolKind::Local(t) => {
+                // The one dynamic-schema tool gets its declaration built
+                // from the per-invocation context. Everything else
+                // returns its static declaration.
+                if t.name() == local::TOOL_GENERATE_MEDIA {
+                    decls.push(local::build_generate_media_declaration(ctx));
+                } else {
+                    decls.push(t.declaration());
+                }
+            }
             ToolKind::Unknown => {}
         }
     }

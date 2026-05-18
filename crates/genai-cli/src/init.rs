@@ -148,11 +148,14 @@ default = "{default_model}"
 # max_tokens = 8192        # cap response length
 # system_prompt = ""       # baseline system instruction for every chat
 
-[model.image]
-default = "gemini-2.5-flash-image"   # 'nano-banana'; supports image-in editing
+# Default models for `generate_media` and `genai -m <media-model>` one-shots.
+[media]
+image  = "gemini-2.5-flash-image"          # 'nano-banana'; supports image-in editing
+speech = "gemini-2.5-flash-preview-tts"
+music  = "lyria-3-clip-preview"
 
+# TTS voice still lives here until multi-speaker support lands.
 [model.tts]
-default = "gemini-2.5-flash-preview-tts"
 voice = "Kore"
 
 [model.embed]

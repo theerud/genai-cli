@@ -43,15 +43,26 @@ default = "gemini-2.5-flash"
 # max_tokens = 8192
 # system_prompt = "You are concise."
 
-[model.image]
-default = "gemini-2.5-flash-image"
+# ----- Media defaults (image / speech / music) -----
+# Used by `generate_media` and by `genai -m <media-model>` one-shots.
+# Roles can override per field via their own [media] table.
 
+[media]
+image  = "gemini-2.5-flash-image"
+speech = "gemini-2.5-flash-preview-tts"
+music  = "lyria-3-clip-preview"
+
+# (TTS voice still lives at [model.tts].voice until multi-speaker lands.)
 [model.tts]
-default = "gemini-2.5-flash-preview-tts"
 voice = "Kore"
 
 [model.embed]
 default = "gemini-embedding-2"
+
+# Legacy: [model.image].default and [model.tts].default still work as a
+# fallback for [media].image / [media].speech and emit a one-time
+# tracing::warn pointing at the new shape. Plan to remove once the
+# project hits 1.0.
 
 # ----- REPL ergonomics -----
 
@@ -122,6 +133,13 @@ tools = ["google_search", "url_context", "fetch_url", "write_file"]
 # Optional: drive multi-step tool workflows under one user prompt.
 mode = "loop"                  # "chat" (default) | "loop"
 max_iterations = 20            # default 8; --max-iter overrides per invocation
+
+# Per-role overrides for generate_media. Any field set here wins over
+# the global [media] table in config.toml.
+[media]
+image  = "imagen-4.0-generate-001"
+# speech = "gemini-2.5-pro-preview-tts"
+# music  = "lyria-3-pro-preview"
 ```
 
 In `loop` mode only the user prompt and the final assistant text are kept in session history — intermediate function calls and tool responses stay out of future context. See [tools.md#loop-mode](tools.md#loop-mode) for the full behavior.

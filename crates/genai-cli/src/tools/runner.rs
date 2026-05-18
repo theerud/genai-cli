@@ -6,20 +6,35 @@ use crate::gemini::Client;
 use crate::gemini::chat::ChatRequest;
 use crate::gemini::types::{Content, FunctionResponse, GenerationConfig, Part};
 
-use super::{build_request_tools, lookup_local};
+use super::lookup_local;
 
 pub struct ToolLoopRequest {
     pub model: String,
     pub contents: Vec<Content>,
     pub system_instruction: Option<String>,
     pub generation_config: Option<GenerationConfig>,
-    pub enabled_tools: Vec<String>,
+    /// Tools list to send with each `generateContent` request, pre-built
+    /// by the caller from the active role/cfg context (so the schema
+    /// reflects role-level media model overrides).
+    pub request_tools: Option<Vec<crate::gemini::types::Tool>>,
     /// Initial iteration budget.
     pub max_iterations: u32,
     /// True when invoked from a role with `mode = "loop"`. Controls the
     /// continue-prompt behavior and the trailer added when the loop stops
     /// at the cap.
     pub loop_mode: bool,
+    /// Pre-resolved media models for this turn (role overrides applied).
+    /// The runner injects these as the `model` arg of matching
+    /// `generate_media` calls so the tool runtime doesn't have to know
+    /// about the active role.
+    pub media_models: MediaModels,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MediaModels {
+    pub image: Option<String>,
+    pub speech: Option<String>,
+    pub music: Option<String>,
 }
 
 pub struct ToolLoopOutcome {
@@ -66,7 +81,7 @@ pub async fn run(
     req: ToolLoopRequest,
     ui: &mut dyn ToolUi,
 ) -> Result<ToolLoopOutcome> {
-    let tools = build_request_tools(&req.enabled_tools);
+    let tools = req.request_tools;
     let mut contents = req.contents;
     let exchange_start = contents.len();
     let mut last_prompt = None;
@@ -139,7 +154,8 @@ pub async fn run(
         contents.push(model_content);
 
         let mut response_parts = Vec::with_capacity(calls.len());
-        for call in calls {
+        for mut call in calls {
+            inject_media_model(&mut call, &req.media_models);
             let Some(tool) = lookup_local(&call.name) else {
                 let err = serde_json::json!({"error": format!("unknown tool '{}'", call.name)});
                 ui.announce_result(&call.name, false, "unknown tool");
@@ -260,6 +276,39 @@ fn stopped_at_cap(
 /// the lower-level `execute` helper here because the spinner has to be
 /// torn down *before* the result line prints — otherwise the cleared
 /// spinner line and the eprintln race on the same row.
+/// For `generate_media` calls without an explicit `model` arg, fill in
+/// the resolved model from this turn's `MediaModels`. Without this the
+/// tool runtime would fall back to the global cfg default and ignore
+/// role-level overrides — the schema would be shaped for the role's
+/// image model but the wrong backend would actually run.
+fn inject_media_model(
+    call: &mut crate::gemini::types::FunctionCall,
+    models: &MediaModels,
+) {
+    if call.name != super::local::TOOL_GENERATE_MEDIA {
+        return;
+    }
+    if call.args.get("model").and_then(|v| v.as_str()).is_some() {
+        return;
+    }
+    let kind = call
+        .args
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let resolved = match kind {
+        "image" => models.image.as_deref(),
+        "speech" => models.speech.as_deref(),
+        "music" => models.music.as_deref(),
+        _ => None,
+    };
+    if let Some(m) = resolved
+        && let Some(obj) = call.args.as_object_mut()
+    {
+        obj.insert("model".to_string(), serde_json::json!(m));
+    }
+}
+
 fn execute_and_audit(
     name: &str,
     tool: &dyn super::LocalTool,

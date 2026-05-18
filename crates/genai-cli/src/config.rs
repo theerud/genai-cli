@@ -15,6 +15,10 @@ pub struct Config {
     pub api_base: Option<String>,
     #[serde(default)]
     pub model: ModelDefaults,
+    /// Preferred place to set image / speech / music defaults. Wins over
+    /// the legacy `[model.image]` / `[model.tts]` sections.
+    #[serde(default)]
+    pub media: MediaConfig,
     #[serde(default)]
     pub output: OutputPaths,
     #[serde(default)]
@@ -23,6 +27,16 @@ pub struct Config {
     pub aliases: BTreeMap<String, AliasEntry>,
     #[serde(default)]
     pub security: SecurityConfig,
+}
+
+/// Default models for media generation, in one place. Read by
+/// `generate_media` and the CLI one-shot paths. Roles can override per
+/// field via their own `[media]` table.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MediaConfig {
+    pub image: Option<String>,
+    pub speech: Option<String>,
+    pub music: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -279,6 +293,93 @@ impl Config {
             .as_deref()
             .unwrap_or("gemini-2.5-flash")
     }
+
+    /// Effective media model for a given kind, applying the legacy
+    /// `[model.image]` / `[model.tts]` fallbacks. Hardcoded fallbacks
+    /// are used when neither source set anything.
+    ///
+    /// Emits a one-time deprecation warning when a legacy key is the
+    /// chosen source — the user should migrate to `[media]`.
+    pub fn media_default(&self, kind: MediaKind) -> String {
+        if let Some(v) = self.media_field(kind) {
+            return v.to_string();
+        }
+        if let Some(v) = self.legacy_media_field(kind) {
+            warn_legacy_media_once(kind);
+            return v.to_string();
+        }
+        kind.hardcoded_default().to_string()
+    }
+
+    fn media_field(&self, kind: MediaKind) -> Option<&str> {
+        match kind {
+            MediaKind::Image => self.media.image.as_deref(),
+            MediaKind::Speech => self.media.speech.as_deref(),
+            MediaKind::Music => self.media.music.as_deref(),
+        }
+    }
+
+    fn legacy_media_field(&self, kind: MediaKind) -> Option<&str> {
+        match kind {
+            MediaKind::Image => self.model.image.default.as_deref(),
+            MediaKind::Speech => self.model.tts.default.as_deref(),
+            MediaKind::Music => None, // no legacy section ever existed
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaKind {
+    Image,
+    Speech,
+    Music,
+}
+
+impl MediaKind {
+    fn hardcoded_default(self) -> &'static str {
+        match self {
+            MediaKind::Image => "imagen-4.0-generate-001",
+            MediaKind::Speech => "gemini-2.5-flash-preview-tts",
+            MediaKind::Music => "lyria-3-clip-preview",
+        }
+    }
+
+    fn legacy_path(self) -> &'static str {
+        match self {
+            MediaKind::Image => "[model.image].default",
+            MediaKind::Speech => "[model.tts].default",
+            MediaKind::Music => "n/a",
+        }
+    }
+
+    fn new_path(self) -> &'static str {
+        match self {
+            MediaKind::Image => "media.image",
+            MediaKind::Speech => "media.speech",
+            MediaKind::Music => "media.music",
+        }
+    }
+}
+
+fn warn_legacy_media_once(kind: MediaKind) {
+    use std::sync::OnceLock;
+    // One OnceLock per kind so the warning fires at most once per kind
+    // per process — but each kind can warn independently.
+    static IMAGE: OnceLock<()> = OnceLock::new();
+    static SPEECH: OnceLock<()> = OnceLock::new();
+    static MUSIC: OnceLock<()> = OnceLock::new();
+    let cell = match kind {
+        MediaKind::Image => &IMAGE,
+        MediaKind::Speech => &SPEECH,
+        MediaKind::Music => &MUSIC,
+    };
+    cell.get_or_init(|| {
+        tracing::warn!(
+            "{} is deprecated; move the value to {} in config.toml",
+            kind.legacy_path(),
+            kind.new_path()
+        );
+    });
 }
 
 #[cfg(test)]

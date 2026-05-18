@@ -172,6 +172,11 @@ pub async fn run(
             debug!(tool = %call.name, %summary, "tool call");
             ui.announce_call(&call.name, &summary);
 
+            // The policy decision is made against normalized args (canonical
+            // paths, etc.); to keep TOCTOU as narrow as possible the tool
+            // runtime and audit log also use those normalized args. A
+            // symlink swap between normalize and run still loses, but the
+            // policy and runtime now agree on what they're working with.
             let normalized = tool.normalize_for_policy(&call.args);
             let outcome = super::policy::evaluate(&call.name, &normalized);
             debug!(tool = %call.name, decision = ?outcome.decision, source = %outcome.source.label(), "policy");
@@ -181,19 +186,19 @@ pub async fn run(
                     let msg = format!("policy denied (matched {})", outcome.source.label());
                     let v = serde_json::json!({"error": msg.clone()});
                     ui.announce_result(&call.name, false, &msg);
-                    crate::audit::log(&call.name, &call.args, "denied", &msg);
+                    crate::audit::log(&call.name, &normalized, "denied", &msg);
                     v
                 }
                 crate::config::Decision::Allow => {
-                    execute_and_audit(&call.name, tool, &call.args, iter + 1, budget, ui)
+                    execute_and_audit(&call.name, tool, &normalized, iter + 1, budget, ui)
                 }
                 crate::config::Decision::Prompt => {
                     if !tool.requires_confirmation() {
-                        execute_and_audit(&call.name, tool, &call.args, iter + 1, budget, ui)
+                        execute_and_audit(&call.name, tool, &normalized, iter + 1, budget, ui)
                     } else {
                         match ui.confirm(&call.name, &summary) {
                             Confirmation::Allow => {
-                                execute_and_audit(&call.name, tool, &call.args, iter + 1, budget, ui)
+                                execute_and_audit(&call.name, tool, &normalized, iter + 1, budget, ui)
                             }
                             Confirmation::Deny => {
                                 let v = serde_json::json!({
@@ -202,7 +207,7 @@ pub async fn run(
                                 ui.announce_result(&call.name, false, "denied by user");
                                 crate::audit::log(
                                     &call.name,
-                                    &call.args,
+                                    &normalized,
                                     "denied",
                                     "denied by user",
                                 );

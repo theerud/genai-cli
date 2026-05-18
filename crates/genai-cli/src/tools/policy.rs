@@ -208,6 +208,9 @@ fn builtin_deny_match(tool: &str, args: &Value) -> Option<&'static str> {
         if is_private_ipv4(&host) {
             return Some("private-ipv4");
         }
+        if is_private_ipv6(&host) {
+            return Some("private-ipv6");
+        }
         // 169.254.169.254 cloud metadata is caught by is_private_ipv4
         // (169.254.0.0/16). 0.0.0.0/8 and 127.0.0.0/8 also caught there.
     }
@@ -228,6 +231,42 @@ fn url_host(url: &str) -> Option<&str> {
         return stripped.split(']').next();
     }
     Some(host_port.split_once(':').map(|(h, _)| h).unwrap_or(host_port))
+}
+
+/// Detect IPv6 addresses (with or without zone/scope) that resolve into
+/// link-local, unique-local, loopback, or v4-mapped private ranges. We
+/// parse via `std::net::Ipv6Addr` for correctness and then test by
+/// segment / prefix rather than hand-rolling string matchers.
+fn is_private_ipv6(addr: &str) -> bool {
+    // Strip a `%zone` suffix if present (`fe80::1%eth0`).
+    let bare = addr.split('%').next().unwrap_or(addr);
+    let Ok(ip) = bare.parse::<std::net::Ipv6Addr>() else {
+        return false;
+    };
+    if ip.is_loopback() {
+        return true; // ::1
+    }
+    let segs = ip.segments();
+    // Unique-local: fc00::/7
+    if (segs[0] & 0xfe00) == 0xfc00 {
+        return true;
+    }
+    // Link-local: fe80::/10
+    if (segs[0] & 0xffc0) == 0xfe80 {
+        return true;
+    }
+    // IPv4-mapped IPv6 (::ffff:0:0/96) — check the embedded v4.
+    if segs[0..5].iter().all(|s| *s == 0) && segs[5] == 0xffff
+        && let Some(v4) = ip.to_ipv4_mapped()
+        && is_private_ipv4(&v4.to_string())
+    {
+        return true;
+    }
+    // ::/128 unspecified, and the deprecated IPv4-compatible space (::a.b.c.d).
+    if segs[0..6].iter().all(|s| *s == 0) {
+        return true;
+    }
+    false
 }
 
 fn is_private_ipv4(addr: &str) -> bool {
@@ -298,6 +337,27 @@ mod tests {
         assert!(tool_selector_matches(&s, "read_file"));
         assert!(tool_selector_matches(&s, "list_dir"));
         assert!(!tool_selector_matches(&s, "exec"));
+    }
+
+    #[test]
+    fn ipv6_floor_catches_unique_local() {
+        assert!(is_private_ipv6("fc00::1"));
+        assert!(is_private_ipv6("fd12:3456:789a::1"));
+        assert!(!is_private_ipv6("2001:db8::1")); // doc-range, not private
+    }
+
+    #[test]
+    fn ipv6_floor_catches_link_local_and_loopback() {
+        assert!(is_private_ipv6("fe80::1"));
+        assert!(is_private_ipv6("fe80::1%eth0"));
+        assert!(is_private_ipv6("::1"));
+    }
+
+    #[test]
+    fn ipv6_floor_catches_v4_mapped_private() {
+        assert!(is_private_ipv6("::ffff:10.0.0.1"));
+        assert!(is_private_ipv6("::ffff:127.0.0.1"));
+        assert!(!is_private_ipv6("::ffff:8.8.8.8"));
     }
 
     #[test]

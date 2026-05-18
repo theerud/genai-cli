@@ -65,10 +65,19 @@ The LLM only sees parameters that actually apply to the resolved model, so it ca
   // When the active image model is conversational (gemini-*-image, nano-banana):
   "image":  { "input_paths": ["ref.png"] },
 
-  "speech": { "voice": "Kore" },
+  "speech": { "voice": "Kore" },  // enum-constrained to the 30 prebuilt names; see `genai voices list`
   "music":  { }
 }
 ```
+
+**Voices.** `speech.voice` is enum-constrained to the 30 names from Gemini's prebuilt TTS catalog (`Kore`, `Charon`, `Aoede`, `Zephyr`, ...). Each has a documented gender + style; the LLM sees those hints in the schema description so it can pick by intent ("warm female", "informative male"). For a quick reference at the CLI:
+
+```bash
+genai voices list                       # all 30
+genai voices list -g female -s warm     # filter
+```
+
+In the REPL: `.voices [filter]` (filter is a gender like `m`/`f` or a style substring like `warm`).
 
 **`prompt` vs `prompt_file`.** Mutually exclusive — provide exactly one. Use `prompt` for short inline content; use `prompt_file` for long inputs (podcast transcripts, lyric sheets, etc.) so the content doesn't have to round-trip through the LLM's output tokens. When the user attached a text file with `-f`, the file's path appears in the `[attached: ...]` preamble at the top of the user message — the LLM should pass that path as `prompt_file` directly.
 

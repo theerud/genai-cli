@@ -16,6 +16,7 @@ pub enum DotCmd {
     Tools(Option<String>),
     Preview(String),
     Audit(Option<usize>),
+    Voices(Option<String>),
     Trust(TrustCmd),
     Undo,
     Retry,
@@ -108,6 +109,7 @@ pub fn parse(line: &str) -> Option<DotCmd> {
             let n = tail.first().and_then(|s| s.parse::<usize>().ok());
             DotCmd::Audit(n)
         }
+        "voices" => DotCmd::Voices(opt_first(&tail)),
         "trust" => match tail.as_slice() {
             [] | ["list"] => DotCmd::Trust(TrustCmd::List),
             ["clear"] => DotCmd::Trust(TrustCmd::Clear),

@@ -62,6 +62,24 @@ pub enum Command {
         #[command(subcommand)]
         sub: AuditCmd,
     },
+    /// List Gemini TTS prebuilt voices
+    Voices {
+        #[command(subcommand)]
+        sub: VoicesCmd,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum VoicesCmd {
+    /// List voices, with optional filters
+    List {
+        /// Filter by gender (male/female / m/f)
+        #[arg(short = 'g', long)]
+        gender: Option<String>,
+        /// Filter by style substring (e.g., "firm", "warm", "informative")
+        #[arg(short = 's', long)]
+        style: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

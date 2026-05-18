@@ -582,7 +582,15 @@ pub fn build_generate_media_declaration(
                     "type": "object",
                     "description": "Speech-only options.",
                     "properties": {
-                        "voice": {"type": "string", "description": "Prebuilt voice name."}
+                        "voice": {
+                            "type": "string",
+                            "enum": crate::voices::names(),
+                            "description": format!(
+                                "Prebuilt voice name. Pick by style/gender — \
+                                 each voice has a documented character. Catalog: {}.",
+                                crate::voices::descriptor_list()
+                            )
+                        }
                     }
                 },
                 "music": {

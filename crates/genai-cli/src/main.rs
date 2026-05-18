@@ -11,13 +11,14 @@ mod session;
 mod spinner;
 mod tools;
 mod ui;
+mod voices;
 
 use anyhow::{Result, bail};
 use clap::Parser;
 use futures_util::StreamExt;
 use std::io::{self, IsTerminal, Write};
 
-use cli::{AuditCmd, Cli, Command, ModelsCmd, SessionsCmd};
+use cli::{AuditCmd, Cli, Command, ModelsCmd, SessionsCmd, VoicesCmd};
 use gemini::Client;
 use gemini::chat::{ChatEvent, ChatRequest};
 use gemini::image::ImageRequest;
@@ -60,6 +61,11 @@ async fn real_main() -> Result<()> {
             Command::Init { force } => init::run(*force),
             Command::Audit { sub } => match sub {
                 AuditCmd::Tail { count, json } => cmd_audit_tail(*count, *json),
+            },
+            Command::Voices { sub } => match sub {
+                VoicesCmd::List { gender, style } => {
+                    cmd_voices_list(gender.as_deref(), style.as_deref())
+                }
             },
         };
     }
@@ -668,6 +674,32 @@ fn cmd_gc() -> Result<()> {
     let mut db = open_db()?;
     let n = session::gc_blobs(&mut db)?;
     eprintln!("removed {n} orphaned attachment(s)");
+    Ok(())
+}
+
+fn cmd_voices_list(gender: Option<&str>, style: Option<&str>) -> Result<()> {
+    let gender_filter = match gender {
+        Some(s) => match voices::Gender::parse(s) {
+            Some(g) => Some(g),
+            None => bail!("--gender expects 'male' or 'female' (got '{s}')"),
+        },
+        None => None,
+    };
+    let list = voices::filter(gender_filter, style);
+    if list.is_empty() {
+        eprintln!("(no voices match filters)");
+        return Ok(());
+    }
+    let name_w = list.iter().map(|v| v.name.len()).max().unwrap_or(8);
+    for v in list {
+        println!(
+            "{:<width$}  {}  {}",
+            v.name,
+            v.gender.short(),
+            v.style,
+            width = name_w
+        );
+    }
     Ok(())
 }
 

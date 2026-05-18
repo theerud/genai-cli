@@ -68,6 +68,7 @@ pub(super) async fn handle_command(state: &mut ReplState, cmd: DotCmd) -> Result
         DotCmd::Tools(arg) => handle_tools_cmd(state, arg)?,
         DotCmd::Preview(path) => handle_preview(state, &path)?,
         DotCmd::Audit(n) => handle_audit(n.unwrap_or(20)),
+        DotCmd::Voices(filter) => handle_voices(filter.as_deref()),
         DotCmd::Trust(cmd) => handle_trust(state, cmd),
         DotCmd::Undo => handle_undo(state)?,
         DotCmd::Retry => handle_retry(state).await?,
@@ -202,6 +203,7 @@ Commands:
   .image / .tts / .music    one-off generation in REPL
   .preview <path>    render an image inline (Kitty / iTerm2 terminals)
   .audit [N]         show last N audit-log entries (default 20)
+  .voices [filter]   list TTS voices; filter is a gender (m/f) or style substring
   .trust [list|clear|drop <name>]
                      inspect / revoke session trust for confirmable tools
   .undo              drop last completed turn from history (+ session DB)
@@ -281,6 +283,33 @@ fn handle_trust(state: &mut ReplState, cmd: TrustCmd) {
                 eprintln!("({name} wasn't trusted)");
             }
         }
+    }
+}
+
+fn handle_voices(filter: Option<&str>) {
+    // Lenient single-arg parsing: try as gender first, fall back to style
+    // substring. Lets `.voices female` and `.voices warm` both work.
+    let (gender, style) = match filter {
+        None => (None, None),
+        Some(s) => match crate::voices::Gender::parse(s) {
+            Some(g) => (Some(g), None),
+            None => (None, Some(s)),
+        },
+    };
+    let list = crate::voices::filter(gender, style);
+    if list.is_empty() {
+        eprintln!("(no voices match)");
+        return;
+    }
+    let name_w = list.iter().map(|v| v.name.len()).max().unwrap_or(8);
+    for v in list {
+        eprintln!(
+            "{:<width$}  {}  {}",
+            v.name,
+            v.gender.short(),
+            v.style,
+            width = name_w
+        );
     }
 }
 

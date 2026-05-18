@@ -44,6 +44,7 @@ Long role / session names are truncated to 16 chars with an ellipsis.
 | `.tools [list\|name]` | list or toggle tools (built-in, local, user-defined) |
 | `.preview <path>` | render an image inline (Kitty / iTerm2) |
 | `.audit [N]` | show the last N audit-log entries (default 20) |
+| `.voices [filter]` | list TTS voices; filter is a gender (`m`/`f`) or style substring |
 | `.trust [list\|clear\|drop <name>]` | inspect / revoke per-session tool trust |
 | `.undo` | drop the last completed turn (history + DB) |
 | `.retry` | re-run the previous user prompt |

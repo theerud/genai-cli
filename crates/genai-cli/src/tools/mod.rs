@@ -1,5 +1,6 @@
 pub mod builtin;
 pub mod cli_ui;
+pub mod generate_media;
 pub mod local;
 pub mod policy;
 pub mod process;
@@ -59,8 +60,8 @@ pub fn build_request_tools(
                 // The one dynamic-schema tool gets its declaration built
                 // from the per-invocation context. Everything else
                 // returns its static declaration.
-                if t.name() == local::TOOL_GENERATE_MEDIA {
-                    decls.push(local::build_generate_media_declaration(ctx));
+                if t.name() == generate_media::TOOL_GENERATE_MEDIA {
+                    decls.push(generate_media::build_declaration(ctx));
                 } else {
                     decls.push(t.declaration());
                 }

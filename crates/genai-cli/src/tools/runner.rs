@@ -290,7 +290,7 @@ fn inject_media_model(
     call: &mut crate::gemini::types::FunctionCall,
     models: &MediaModels,
 ) {
-    if call.name != super::local::TOOL_GENERATE_MEDIA {
+    if call.name != super::generate_media::TOOL_GENERATE_MEDIA {
         return;
     }
     if call.args.get("model").and_then(|v| v.as_str()).is_some() {

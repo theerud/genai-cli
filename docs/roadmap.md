@@ -66,5 +66,6 @@ Shipped in this iteration of work:
 - Unified `generate_media` tool (image / speech / music dispatch with auto-path and optional inline preview)
 - TTS voice catalog (`genai voices list`, `.voices`, enum-constrained schema with style/gender hints)
 - Multi-speaker TTS via `speech.speakers` (two-speaker dialog with hard validations)
+- Music gen multimodal input (`music.input_images`) + `music.response_format` (mp3/wav)
 
 See git log for the full sequence.

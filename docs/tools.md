@@ -75,9 +75,25 @@ The LLM only sees parameters that actually apply to the resolved model, so it ca
       { "name": "Bob",   "voice": "Charon" }
     ]
   },
-  "music":  { }
+  "music":  {
+    "input_images":    ["mood-reference.jpg"],   // up to 10; Lyria multimodal mood input
+    "response_format": "wav"                     // mp3 (default) | wav; wav is Pro-only
+  }
 }
 ```
+
+**Music conventions.** Lyria's API surface is intentionally text-driven. Lyrics, song structure, and timing all live *inside* the prompt text:
+
+- Sections: `[Verse]`, `[Chorus]`, `[Bridge]` etc.
+- Lyrics: inline, inside the section tags.
+- Timing (Pro only): `[0:00-0:10]`-style timestamp ranges.
+- Duration: Clip outputs ~30s flat; Pro defaults to ~2 minutes and is steered by phrases like "a 2-minute piece in...".
+
+There is no separate `lyrics` field — putting it in its own slot would orphan it from the structure tags it has to interleave with. For a long lyric sheet, write the whole descriptor + structure + lyrics into a file and pass it via the top-level `prompt_file`.
+
+`music.input_images` accepts up to 10 reference image paths for visual mood / palette / atmosphere influence (Lyria 3 multimodal). The same `-f` → `[attached:]` preamble pattern feeds it.
+
+`music.response_format` is `mp3` (default) for both variants; `wav` is only honored by Lyria 3 Pro — the tool drops it back to mp3 with a warning when the resolved model is Clip.
 
 **Single vs multi-speaker.** `speech.voice` is for one voice. `speech.speakers` is for a two-person dialog — exactly two entries, each `{name, voice}`. Mutually exclusive with `voice`. The transcript in `prompt` (or `prompt_file`) must use `Name:` line prefixes that match each speaker's `name`; otherwise the API renders the prefix as plain text in a single voice. The tool rejects duplicate voices, duplicate names, names missing from the transcript, and any speaker count other than 2.
 

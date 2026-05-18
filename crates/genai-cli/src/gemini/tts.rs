@@ -29,6 +29,14 @@ pub struct SpeakerConfig {
 pub struct MusicRequest {
     pub model: String,
     pub prompt: String,
+    /// Reference images for visual mood/atmosphere influence (Lyria
+    /// multimodal input). Up to 10.
+    pub input_images: Vec<super::image::InputImage>,
+    /// Output format. `Some("mp3")` or `Some("wav")`; None lets the
+    /// API pick its default. Lyria 3 Clip only supports mp3 — the
+    /// tool layer drops wav with a warning for Clip before reaching
+    /// this point.
+    pub response_format: Option<String>,
 }
 
 pub struct AudioOut {
@@ -135,9 +143,24 @@ impl Client {
     /// in the deployed API, this call will surface the server's error verbatim.
     pub async fn generate_music(&self, req: MusicRequest) -> Result<AudioOut> {
         let url = format!("{}/v1beta/models/{}:generateContent", self.base, req.model);
+        let mut parts: Vec<serde_json::Value> =
+            vec![serde_json::json!({"text": req.prompt})];
+        for img in &req.input_images {
+            let data = base64::engine::general_purpose::STANDARD.encode(&img.bytes);
+            parts.push(serde_json::json!({
+                "inlineData": {
+                    "mimeType": img.mime,
+                    "data": data
+                }
+            }));
+        }
+        let mut gen_cfg = serde_json::json!({"responseModalities": ["AUDIO"]});
+        if let Some(fmt) = &req.response_format {
+            gen_cfg["responseFormat"] = serde_json::Value::String(fmt.clone());
+        }
         let body = serde_json::json!({
-            "contents": [{"role": "user", "parts": [{"text": req.prompt}]}],
-            "generationConfig": {"responseModalities": ["AUDIO"]}
+            "contents": [{"role": "user", "parts": parts}],
+            "generationConfig": gen_cfg
         });
 
         let resp = self

@@ -118,6 +118,8 @@ pub(super) async fn handle_music_cmd(state: &mut ReplState, args: ActionArgs) ->
             .generate_music(MusicRequest {
                 model: resolved.id,
                 prompt: args.prompt,
+                input_images: Vec::new(),
+                response_format: None,
             })
             .await?
     };

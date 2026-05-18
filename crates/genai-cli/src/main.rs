@@ -223,6 +223,8 @@ async fn run_one_shot_music(
             .generate_music(MusicRequest {
                 model: resolved.id.clone(),
                 prompt,
+                input_images: Vec::new(),
+                response_format: None,
             })
             .await?
     };

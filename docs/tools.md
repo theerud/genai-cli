@@ -37,6 +37,8 @@ tools = ["google_search", "url_context"]
 
 Confirmable tools (`exec`, `write_file`, `generate_media`) prompt `[y/N/A]` per call. `A` trusts the tool for the rest of the REPL session — see `.trust` below.
 
+For a worked example role plus usage across all three kinds, see [recipes/media.md](recipes/media.md).
+
 ### `generate_media` shape
 
 The schema is **rebuilt each turn** from the *effective* image model for the active role. Resolution order:

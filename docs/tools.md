@@ -207,8 +207,47 @@ Inspect / revoke:
 
 Trust resets when the REPL exits. One-off mode treats `A` and `y` as identical (single turn).
 
-## Notes on safety
+## Security model and trust
 
-- Sandboxing (`exec` chroot/bubblewrap/landlock) is **not** implemented. The policy + confirmation flow is the protection.
-- DNS-rebinding defenses on `fetch_url` are **not** implemented. The literal-host match against the URL is best-effort.
-- Per-role permission profiles are **not** implemented — all rules are global. See [roadmap.md](roadmap.md).
+Be honest about what this tool's policy layer does and doesn't do.
+
+### `exec` is a policy wildcard
+
+The `exec` tool runs `sh -c <command>` — a shell. Fine-grained policies on other tools (deny `write_file` under `~/.ssh/`, deny `fetch_url` to private hosts) do **not** constrain what `exec` can do. The same effect — exfiltrate a file, write to a sensitive path, hit an internal host — is reachable through `exec` regardless of how the other tools are configured.
+
+If you enable `exec` in a role, you are granting that role effective shell access, modulo the per-call `[y/N/A]` confirmation. Mitigations that work:
+
+- **Pair every role that enables `exec` with a narrowing `[[security.rule]]`** that limits which commands are allowed without prompting. Example:
+  ```toml
+  [[security.rule]]
+  tool = "exec"
+  arg = "command"
+  patterns = ["git status*", "git diff*", "ls *"]
+  decision = "allow"
+  priority = 200
+  ```
+- **Read the full command in the confirm prompt before answering `y`.** It shows the whole shell line, so `rm -rf /tmp/x && echo bad >> ~/.ssh/authorized_keys` is visible — refuse it.
+- **Don't enable `exec` in starter roles.** The shipped `research` role intentionally doesn't.
+
+### `fetch_url` allow rules trust the host string, not the resolved IP
+
+The built-in floor checks the literal host in the URL against private-IP and private-hostname patterns *before* sending the request. If you write an `allow` rule for a specific domain, however, the rule trusts the domain name — DNS rebinding to a private IP between checks and the request is **not** prevented.
+
+Treat allow rules on `fetch_url` as "trust this domain owner." Don't allow domains you don't control.
+
+### Other things the policy is not
+
+- **No `exec` sandboxing.** No chroot, bubblewrap, landlock, seccomp.
+- **Per-role permission profiles are not implemented** — all `[[security.rule]]` entries are global. The active role decides which tools are enabled; the policy decides what each tool can do.
+- **TOCTOU is mitigated but not eliminated.** The policy evaluates against a canonicalized path; the runtime uses the same canonicalized args. A symlink swap between those two points is a tiny window but still possible without `openat2`-class atomicity.
+- **`.env` parser is line-oriented.** Single-line `KEY=VALUE` only. Quoted multi-line values, `export` prefixes, and `${var}` expansion are not supported. Keep one value per line.
+
+### When a loop turn fails
+
+If a loop role's chat turn aborts mid-iteration, the whole exchange is discarded from session history so the next turn isn't corrupted by partial state. The forensic trail is in the audit log — every individual tool call (including the one that failed) is recorded with full args and outcome:
+
+```bash
+genai audit tail -n 30
+# or in the REPL
+.audit 30
+```

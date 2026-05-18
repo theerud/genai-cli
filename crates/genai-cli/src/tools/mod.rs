@@ -5,6 +5,7 @@ pub mod policy;
 pub mod process;
 pub mod runner;
 pub mod user;
+pub mod warn;
 
 use std::collections::HashMap;
 use std::sync::OnceLock;

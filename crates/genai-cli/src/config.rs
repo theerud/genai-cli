@@ -106,6 +106,13 @@ pub struct SecurityConfig {
     pub rules: Vec<PolicyRule>,
     #[serde(default)]
     pub audit: AuditConfig,
+    /// Per-tool glob patterns that, when matched against the tool's
+    /// `describe_call` summary, prepend a `⚠ warning` line above the
+    /// confirmation prompt. Keyed by tool name; an empty list disables
+    /// warnings for that tool; an absent entry falls back to built-in
+    /// defaults (see `tools::warn::DEFAULT_PATTERNS`).
+    #[serde(default)]
+    pub warn: BTreeMap<String, Vec<String>>,
 }
 
 /// One entry in the tool-call policy. See `tools::policy` for evaluation.

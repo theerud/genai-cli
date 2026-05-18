@@ -211,6 +211,32 @@ Trust resets when the REPL exits. One-off mode treats `A` and `y` as identical (
 
 Be honest about what this tool's policy layer does and doesn't do.
 
+### Confirmation warnings
+
+Side-effecting tools (`exec`, `write_file`, `generate_media`, confirmable user tools) prompt `[y/N/A]` before running. The confirm prompt now also matches the tool's call summary against a per-tool list of glob patterns and prepends a `⚠` line listing any matches, so the user has a visible cue before answering.
+
+Defaults catch the obvious traps:
+
+| Tool | Default patterns (excerpt) |
+|---|---|
+| `exec` | `*~/.ssh*`, `*~/.aws*`, `*~/.gnupg*`, `*/.env*`, `*rm -rf /*`, `*curl*\|*sh*`, `*eval $(*`, `*sudo*`, `*chmod 777*` |
+| `write_file` | `*~/.ssh*`, `*~/.aws*`, `*authorized_keys*` |
+
+Override per tool in `config.toml`. Setting any list replaces the default for that tool (so you can quiet a noisy default by listing only the patterns you actually care about; setting `[]` disables warnings for that tool entirely).
+
+```toml
+[security.warn]
+exec = [
+  "*rm -rf*",
+  "*git push --force*",
+  "*~/.ssh*",
+]
+write_file = []                  # I'm careful, no warnings please
+fetch_url = ["*169.254.169.254*"]  # warn on cloud metadata even when allowed
+```
+
+Patterns use the same `*`-glob semantics as `[[security.rule]]` and are matched against the tool's `describe_call` summary string — the same text shown next to `[tool]` in the announcement.
+
 ### `exec` is a policy wildcard
 
 The `exec` tool runs `sh -c <command>` — a shell. Fine-grained policies on other tools (deny `write_file` under `~/.ssh/`, deny `fetch_url` to private hosts) do **not** constrain what `exec` can do. The same effect — exfiltrate a file, write to a sensitive path, hit an internal host — is reachable through `exec` regardless of how the other tools are configured.

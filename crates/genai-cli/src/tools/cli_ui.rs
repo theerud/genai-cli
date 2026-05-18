@@ -58,6 +58,17 @@ impl ToolUi for CliToolUi {
             eprintln!("[tool] {summary}: auto-denied (no TTY)");
             return Confirmation::Deny;
         }
+        // Surface any matching warning patterns above the prompt so the
+        // user has a visible cue before answering. Loads config inline —
+        // confirm() is interactive and not in a hot path.
+        let cfg = crate::config::load().unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "confirm: config load failed");
+            crate::config::Config::default()
+        });
+        let warnings = super::warn::matches(&cfg, name, summary);
+        if !warnings.is_empty() {
+            eprintln!("[tool] ⚠ matched warning pattern(s): {}", warnings.join(", "));
+        }
         eprint!("[tool] run `{summary}`? [y/N/A] ");
         let _ = io::stderr().flush();
         let mut line = String::new();

@@ -377,3 +377,53 @@ fn result_preview(v: &Value) -> String {
         _ => "ok".to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gemini::types::FunctionCall;
+    use serde_json::json;
+
+    fn call(name: &str, args: serde_json::Value) -> FunctionCall {
+        FunctionCall { name: name.to_string(), args }
+    }
+
+    fn models(image: Option<&str>, speech: Option<&str>, music: Option<&str>) -> MediaModels {
+        MediaModels {
+            image: image.map(String::from),
+            speech: speech.map(String::from),
+            music: music.map(String::from),
+        }
+    }
+
+    #[test]
+    fn injects_image_model_when_kind_image() {
+        let mut c = call("generate_media", json!({"kind": "image", "prompt": "x"}));
+        inject_media_model(&mut c, &models(Some("imagen-4.0-generate-001"), None, None));
+        assert_eq!(c.args["model"], "imagen-4.0-generate-001");
+    }
+
+    #[test]
+    fn does_not_overwrite_explicit_model() {
+        let mut c = call(
+            "generate_media",
+            json!({"kind": "image", "prompt": "x", "model": "user-pinned"}),
+        );
+        inject_media_model(&mut c, &models(Some("ignored"), None, None));
+        assert_eq!(c.args["model"], "user-pinned");
+    }
+
+    #[test]
+    fn injects_only_for_generate_media() {
+        let mut c = call("write_file", json!({"path": "/tmp/x", "content": "y"}));
+        inject_media_model(&mut c, &models(Some("imagen-4.0-generate-001"), None, None));
+        assert!(c.args.get("model").is_none());
+    }
+
+    #[test]
+    fn injects_per_kind() {
+        let mut c = call("generate_media", json!({"kind": "speech", "prompt": "hi"}));
+        inject_media_model(&mut c, &models(Some("i"), Some("gemini-2.5-flash-preview-tts"), Some("m")));
+        assert_eq!(c.args["model"], "gemini-2.5-flash-preview-tts");
+    }
+}

@@ -39,7 +39,14 @@ Confirmable tools (`exec`, `write_file`, `generate_media`) prompt `[y/N/A]` per 
 
 ### `generate_media` shape
 
-The schema is **tailored at process start** to the active image model (`cfg.model.image.default`, falling back to `imagen-4.0-generate-001`). The LLM only sees parameters that actually apply, so it can't be tempted by a knob the backend doesn't accept.
+The schema is **rebuilt each turn** from the *effective* image model for the active role. Resolution order:
+
+1. `role.media.image` (per-role override in `role.toml`)
+2. `cfg.media.image` (global default in `config.toml`)
+3. `cfg.model.image.default` (legacy, deprecated)
+4. Hardcoded fallback (`imagen-4.0-generate-001`)
+
+The LLM only sees parameters that actually apply to the resolved model, so it can't be tempted by a knob the backend doesn't accept. Switching roles mid-REPL changes the schema starting on the next turn.
 
 ```jsonc
 {

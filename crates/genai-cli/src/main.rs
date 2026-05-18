@@ -196,7 +196,12 @@ async fn run_one_shot_tts(
             .synthesize_speech(TtsRequest {
                 model: resolved.id.clone(),
                 text,
-                voice: cfg.model.tts.voice.clone(),
+                speech: cfg
+                    .model
+                    .tts
+                    .voice
+                    .clone()
+                    .map(gemini::tts::SpeechConfig::Single),
             })
             .await?
     };

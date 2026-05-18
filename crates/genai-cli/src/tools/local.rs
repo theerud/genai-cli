@@ -580,16 +580,33 @@ pub fn build_generate_media_declaration(
                 "image": image_obj,
                 "speech": {
                     "type": "object",
-                    "description": "Speech-only options.",
+                    "description": "Speech-only options. Set either `voice` (single-speaker) OR `speakers` (two-speaker dialog) — they are mutually exclusive. For two-speaker mode, the transcript in `prompt` / `prompt_file` MUST use `Name:` line prefixes that match each speaker's `name` here, otherwise the API renders the prefix as literal text in a single voice.",
                     "properties": {
                         "voice": {
                             "type": "string",
                             "enum": crate::voices::names(),
                             "description": format!(
-                                "Prebuilt voice name. Pick by style/gender — \
-                                 each voice has a documented character. Catalog: {}.",
+                                "Prebuilt voice name for single-speaker output. Pick by style/gender — each voice has a documented character. Catalog: {}.",
                                 crate::voices::descriptor_list()
                             )
+                        },
+                        "speakers": {
+                            "type": "array",
+                            "minItems": 2,
+                            "maxItems": 2,
+                            "description": "Exactly two speakers for dialog. Names must be distinct, voices must be distinct, and each name must appear as a `Name:` prefix in the transcript.",
+                            "items": {
+                                "type": "object",
+                                "required": ["name", "voice"],
+                                "properties": {
+                                    "name":  { "type": "string", "description": "Speaker label as it appears in the transcript (e.g. 'Alice' for lines starting `Alice:`)." },
+                                    "voice": {
+                                        "type": "string",
+                                        "enum": crate::voices::names(),
+                                        "description": "Prebuilt voice id from the catalog above."
+                                    }
+                                }
+                            }
                         }
                     }
                 },
@@ -707,6 +724,106 @@ impl LocalTool for GenerateMedia {
         }
         out
     }
+}
+
+/// Build the TTS speech config from the `speech` sub-object in args.
+/// Returns `None` for "use API default", `Some(Single(name))` for
+/// single-voice, `Some(Speakers(...))` for two-speaker. All hard
+/// validations live here:
+/// - `voice` and `speakers` are mutually exclusive
+/// - `speakers` must have exactly 2 entries
+/// - distinct voice values, distinct speaker names
+/// - voices must be in the prebuilt catalog
+/// - each speaker name must appear as `Name:` prefix in the transcript
+fn resolve_speech_config(
+    speech_opts: Option<&Value>,
+    cfg: &crate::config::Config,
+    text: &str,
+) -> Result<Option<crate::gemini::tts::SpeechConfig>> {
+    use crate::gemini::tts::{SpeakerConfig, SpeechConfig};
+
+    let Some(opts) = speech_opts else {
+        // Fall back to the cfg-level default voice (legacy [model.tts].voice).
+        return Ok(cfg.model.tts.voice.clone().map(SpeechConfig::Single));
+    };
+
+    let voice = opts.get("voice").and_then(Value::as_str);
+    let speakers = opts.get("speakers").and_then(Value::as_array);
+
+    if voice.is_some() && speakers.is_some() {
+        bail!("speech: set either 'voice' (single) or 'speakers' (multi), not both");
+    }
+
+    if let Some(arr) = speakers {
+        if arr.len() != 2 {
+            bail!(
+                "speech.speakers: must have exactly 2 entries (got {}); use 'voice' for single-speaker",
+                arr.len()
+            );
+        }
+        let mut configs: Vec<SpeakerConfig> = Vec::with_capacity(2);
+        for (i, entry) in arr.iter().enumerate() {
+            let name = entry
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("speech.speakers[{i}]: missing 'name'"))?;
+            let voice = entry
+                .get("voice")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("speech.speakers[{i}]: missing 'voice'"))?;
+            if crate::voices::CATALOG.iter().all(|v| v.name != voice) {
+                bail!(
+                    "speech.speakers[{i}].voice: '{voice}' is not in the prebuilt catalog (see `genai voices list`)"
+                );
+            }
+            configs.push(SpeakerConfig {
+                name: name.to_string(),
+                voice: voice.to_string(),
+            });
+        }
+        if configs[0].name == configs[1].name {
+            bail!("speech.speakers: duplicate name '{}'; speakers must have distinct labels", configs[0].name);
+        }
+        if configs[0].voice == configs[1].voice {
+            bail!(
+                "speech.speakers: both speakers use voice '{}'; pick distinct voices",
+                configs[0].voice
+            );
+        }
+        // Each speaker name must appear as a `Name:` prefix at least once
+        // in the transcript text — otherwise the API renders the literal
+        // `Alice:` as plain text in a single voice.
+        for c in &configs {
+            if !has_speaker_prefix(text, &c.name) {
+                bail!(
+                    "speech.speakers: '{}' is configured but no '{}:' prefix appears in the transcript",
+                    c.name,
+                    c.name
+                );
+            }
+        }
+        return Ok(Some(SpeechConfig::Speakers(configs)));
+    }
+
+    if let Some(v) = voice {
+        if crate::voices::CATALOG.iter().all(|x| x.name != v) {
+            bail!(
+                "speech.voice: '{v}' is not in the prebuilt catalog (see `genai voices list`)"
+            );
+        }
+        return Ok(Some(SpeechConfig::Single(v.to_string())));
+    }
+
+    Ok(cfg.model.tts.voice.clone().map(SpeechConfig::Single))
+}
+
+/// True if any line in `text` starts with `<name>:` (whitespace
+/// permitted before the name). Used to validate that each configured
+/// speaker actually appears in the transcript.
+fn has_speaker_prefix(text: &str, name: &str) -> bool {
+    let needle = format!("{name}:");
+    text.lines()
+        .any(|line| line.trim_start().starts_with(&needle))
 }
 
 /// Resolve the prompt content for `generate_media`. Either `prompt` is
@@ -858,11 +975,7 @@ fn run_speech(
     let model_id = model_override
         .unwrap_or_else(|| cfg.media_default(crate::config::MediaKind::Speech));
     let resolved = crate::models::alias::resolve(cfg, &model_id);
-    let voice = speech_opts
-        .and_then(|v| v.get("voice"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .or_else(|| cfg.model.tts.voice.clone());
+    let speech = resolve_speech_config(speech_opts, cfg, &text)?;
 
     let out_path = match output_override {
         Some(s) => s,
@@ -878,7 +991,7 @@ fn run_speech(
     let req = crate::gemini::tts::TtsRequest {
         model: resolved.id.clone(),
         text,
-        voice,
+        speech,
     };
     let handle = tokio::runtime::Handle::current();
     let audio = tokio::task::block_in_place(|| handle.block_on(client.synthesize_speech(req)))?;
@@ -1055,6 +1168,115 @@ mod tests {
         });
         let s = tool.describe_call(&args);
         assert!(s.contains("from /tmp/transcript.txt"));
+    }
+
+    #[test]
+    fn speech_config_single_voice() {
+        let cfg = crate::config::Config::default();
+        let opts = json!({"voice": "Kore"});
+        let r = resolve_speech_config(Some(&opts), &cfg, "anything").unwrap();
+        match r {
+            Some(crate::gemini::tts::SpeechConfig::Single(n)) => assert_eq!(n, "Kore"),
+            _ => panic!("expected single"),
+        }
+    }
+
+    #[test]
+    fn speech_config_rejects_unknown_voice() {
+        let cfg = crate::config::Config::default();
+        let opts = json!({"voice": "Robocop"});
+        let err = resolve_speech_config(Some(&opts), &cfg, "x").unwrap_err().to_string();
+        assert!(err.contains("not in the prebuilt catalog"));
+    }
+
+    #[test]
+    fn speech_config_speakers_happy_path() {
+        let cfg = crate::config::Config::default();
+        let opts = json!({
+            "speakers": [
+                {"name": "Alice", "voice": "Kore"},
+                {"name": "Bob",   "voice": "Charon"}
+            ]
+        });
+        let r = resolve_speech_config(Some(&opts), &cfg, "Alice: hi\nBob: hi back").unwrap();
+        match r {
+            Some(crate::gemini::tts::SpeechConfig::Speakers(s)) => {
+                assert_eq!(s.len(), 2);
+                assert_eq!(s[0].name, "Alice");
+                assert_eq!(s[1].voice, "Charon");
+            }
+            _ => panic!("expected speakers"),
+        }
+    }
+
+    #[test]
+    fn speech_config_rejects_both_voice_and_speakers() {
+        let cfg = crate::config::Config::default();
+        let opts = json!({
+            "voice": "Kore",
+            "speakers": [
+                {"name": "Alice", "voice": "Kore"},
+                {"name": "Bob",   "voice": "Charon"}
+            ]
+        });
+        let err = resolve_speech_config(Some(&opts), &cfg, "Alice: x\nBob: y").unwrap_err().to_string();
+        assert!(err.contains("not both"));
+    }
+
+    #[test]
+    fn speech_config_rejects_wrong_speakers_count() {
+        let cfg = crate::config::Config::default();
+        let one = json!({"speakers": [{"name": "Alice", "voice": "Kore"}]});
+        assert!(resolve_speech_config(Some(&one), &cfg, "Alice: x").is_err());
+        let three = json!({"speakers": [
+            {"name": "A", "voice": "Kore"},
+            {"name": "B", "voice": "Charon"},
+            {"name": "C", "voice": "Aoede"}
+        ]});
+        assert!(resolve_speech_config(Some(&three), &cfg, "A:\nB:\nC:").is_err());
+    }
+
+    #[test]
+    fn speech_config_rejects_duplicate_voices() {
+        let cfg = crate::config::Config::default();
+        let opts = json!({"speakers": [
+            {"name": "Alice", "voice": "Kore"},
+            {"name": "Bob",   "voice": "Kore"}
+        ]});
+        let err = resolve_speech_config(Some(&opts), &cfg, "Alice: x\nBob: y").unwrap_err().to_string();
+        assert!(err.contains("distinct voices"));
+    }
+
+    #[test]
+    fn speech_config_rejects_duplicate_names() {
+        let cfg = crate::config::Config::default();
+        let opts = json!({"speakers": [
+            {"name": "Alice", "voice": "Kore"},
+            {"name": "Alice", "voice": "Charon"}
+        ]});
+        let err = resolve_speech_config(Some(&opts), &cfg, "Alice: x").unwrap_err().to_string();
+        assert!(err.contains("distinct labels"));
+    }
+
+    #[test]
+    fn speech_config_rejects_missing_name_in_transcript() {
+        let cfg = crate::config::Config::default();
+        let opts = json!({"speakers": [
+            {"name": "Alice", "voice": "Kore"},
+            {"name": "Bob",   "voice": "Charon"}
+        ]});
+        // Bob has no Bob: prefix in the transcript.
+        let err = resolve_speech_config(Some(&opts), &cfg, "Alice: only me here").unwrap_err().to_string();
+        assert!(err.contains("Bob"));
+    }
+
+    #[test]
+    fn has_speaker_prefix_accepts_indented_lines() {
+        assert!(has_speaker_prefix("Alice: hi", "Alice"));
+        assert!(has_speaker_prefix("   Alice: hi", "Alice"));
+        assert!(has_speaker_prefix("intro line\nBob: hi", "Bob"));
+        assert!(!has_speaker_prefix("hi Bob: not really", "Bob"));
+        assert!(!has_speaker_prefix("Bob said: hi", "Bob"));
     }
 
     #[test]

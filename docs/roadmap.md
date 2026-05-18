@@ -64,5 +64,7 @@ Shipped in this iteration of work:
 - Spinner during silent waits
 - Loop-mode roles (multi-iteration tool runs under one prompt; `write_file` built-in; `--max-iter`)
 - Unified `generate_media` tool (image / speech / music dispatch with auto-path and optional inline preview)
+- TTS voice catalog (`genai voices list`, `.voices`, enum-constrained schema with style/gender hints)
+- Multi-speaker TTS via `speech.speakers` (two-speaker dialog with hard validations)
 
 See git log for the full sequence.

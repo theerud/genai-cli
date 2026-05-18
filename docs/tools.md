@@ -65,12 +65,23 @@ The LLM only sees parameters that actually apply to the resolved model, so it ca
   // When the active image model is conversational (gemini-*-image, nano-banana):
   "image":  { "input_paths": ["ref.png"] },
 
-  "speech": { "voice": "Kore" },  // enum-constrained to the 30 prebuilt names; see `genai voices list`
+  "speech": {                              // single-speaker
+    "voice": "Kore"                        // enum: 30 prebuilt names; see `genai voices list`
+  },
+  // OR — two-speaker dialog:
+  "speech": {
+    "speakers": [
+      { "name": "Alice", "voice": "Kore"   },
+      { "name": "Bob",   "voice": "Charon" }
+    ]
+  },
   "music":  { }
 }
 ```
 
-**Voices.** `speech.voice` is enum-constrained to the 30 names from Gemini's prebuilt TTS catalog (`Kore`, `Charon`, `Aoede`, `Zephyr`, ...). Each has a documented gender + style; the LLM sees those hints in the schema description so it can pick by intent ("warm female", "informative male"). For a quick reference at the CLI:
+**Single vs multi-speaker.** `speech.voice` is for one voice. `speech.speakers` is for a two-person dialog — exactly two entries, each `{name, voice}`. Mutually exclusive with `voice`. The transcript in `prompt` (or `prompt_file`) must use `Name:` line prefixes that match each speaker's `name`; otherwise the API renders the prefix as plain text in a single voice. The tool rejects duplicate voices, duplicate names, names missing from the transcript, and any speaker count other than 2.
+
+**Voices.** Both `speech.voice` and `speech.speakers[].voice` are enum-constrained to the 30 names from Gemini's prebuilt TTS catalog (`Kore`, `Charon`, `Aoede`, `Zephyr`, ...). Each has a documented gender + style; the LLM sees those hints in the schema description so it can pick by intent ("warm female", "informative male"). For a quick reference at the CLI:
 
 ```bash
 genai voices list                       # all 30

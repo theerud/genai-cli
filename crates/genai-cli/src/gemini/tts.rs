@@ -8,7 +8,22 @@ use super::types::{ApiErrorEnvelope, Content, Part};
 pub struct TtsRequest {
     pub model: String,
     pub text: String,
-    pub voice: Option<String>,
+    /// Speech config. Either single-voice (`Single(name)`) or
+    /// multi-speaker (`Speakers([{name, voice}; 2])`). When None, the
+    /// API's default voice is used.
+    pub speech: Option<SpeechConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SpeechConfig {
+    Single(String),
+    Speakers(Vec<SpeakerConfig>),
+}
+
+#[derive(Debug, Clone)]
+pub struct SpeakerConfig {
+    pub name: String,
+    pub voice: String,
 }
 
 pub struct MusicRequest {
@@ -38,16 +53,41 @@ struct GenCandidate {
 impl Client {
     pub async fn synthesize_speech(&self, req: TtsRequest) -> Result<AudioOut> {
         let url = format!("{}/v1beta/models/{}:generateContent", self.base, req.model);
-        let voice = req.voice.as_deref().unwrap_or("Kore");
+        let speech_config = match &req.speech {
+            Some(SpeechConfig::Single(name)) => serde_json::json!({
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {"voiceName": name}
+                }
+            }),
+            Some(SpeechConfig::Speakers(speakers)) => {
+                let configs: Vec<_> = speakers
+                    .iter()
+                    .map(|s| {
+                        serde_json::json!({
+                            "speaker": s.name,
+                            "voiceConfig": {
+                                "prebuiltVoiceConfig": {"voiceName": s.voice}
+                            }
+                        })
+                    })
+                    .collect();
+                serde_json::json!({
+                    "multiSpeakerVoiceConfig": {
+                        "speakerVoiceConfigs": configs
+                    }
+                })
+            }
+            None => serde_json::json!({
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {"voiceName": "Kore"}
+                }
+            }),
+        };
         let body = serde_json::json!({
             "contents": [{"role": "user", "parts": [{"text": req.text}]}],
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
-                "speechConfig": {
-                    "voiceConfig": {
-                        "prebuiltVoiceConfig": {"voiceName": voice}
-                    }
-                }
+                "speechConfig": speech_config
             }
         });
 

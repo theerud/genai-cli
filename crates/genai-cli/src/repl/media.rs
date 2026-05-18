@@ -88,7 +88,7 @@ pub(super) async fn handle_tts_cmd(state: &mut ReplState, args: ActionArgs) -> R
             .synthesize_speech(TtsRequest {
                 model: resolved.id,
                 text: args.prompt,
-                voice,
+                speech: voice.map(crate::gemini::tts::SpeechConfig::Single),
             })
             .await?
     };
